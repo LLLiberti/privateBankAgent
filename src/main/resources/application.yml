@@ -9,14 +9,6 @@ spring:
       maximum-pool-size: 10
       minimum-idle: 1
       connection-timeout: 10000
-  jpa:
-    open-in-view: false
-    hibernate:
-      ddl-auto: validate
-    properties:
-      hibernate:
-        jdbc:
-          time_zone: Asia/Shanghai
   flyway:
     enabled: true
     baseline-on-migrate: true
@@ -26,6 +18,15 @@ spring:
     multipart:
       max-file-size: 20MB
       max-request-size: 20MB
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    default-enum-type-handler: org.apache.ibatis.type.EnumTypeHandler
+  global-config:
+    banner: false
+    db-config:
+      update-strategy: not_null
 
 server:
   port: ${SERVER_PORT:8080}

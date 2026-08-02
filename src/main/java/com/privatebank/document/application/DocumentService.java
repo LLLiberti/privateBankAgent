@@ -1,16 +1,16 @@
 package com.privatebank.document.application;
 
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.privatebank.common.api.PageResponse;
 import com.privatebank.common.exception.BusinessException;
 import com.privatebank.common.exception.ErrorCode;
 import com.privatebank.document.api.DocumentResponse;
 import com.privatebank.document.domain.DocumentRecord;
-import com.privatebank.document.repository.DocumentRecordRepository;
+import com.privatebank.document.mapper.DocumentRecordMapper;
 import com.privatebank.security.CurrentUserPrincipal;
 import com.privatebank.security.CurrentUserService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -23,7 +23,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class DocumentService {
 
-    private final DocumentRecordRepository documentRepository;
+    private final DocumentRecordMapper documentMapper;
     private final CurrentUserService currentUserService;
     private final FileStorageService storageService;
 
@@ -31,11 +31,13 @@ public class DocumentService {
     public PageResponse<DocumentResponse> list(
             CurrentUserPrincipal principal, Long personId, int pageNo, int pageSize) {
         currentUserService.requireCustomerAccess(principal, personId);
-        var page = documentRepository.findByPersonId(
-                personId,
-                PageRequest.of(pageNo - 1, pageSize, Sort.by(Sort.Direction.DESC, "uploadTime")));
-        return PageResponse.of(page.getContent().stream().map(DocumentResponse::from).toList(),
-                page.getTotalElements(), pageNo, pageSize);
+        Page<DocumentRecord> page = documentMapper.selectPage(
+                new Page<>(pageNo, pageSize),
+                Wrappers.<DocumentRecord>lambdaQuery()
+                        .eq(DocumentRecord::getPersonId, personId)
+                        .orderByDesc(DocumentRecord::getUploadTime));
+        return PageResponse.of(page.getRecords().stream().map(DocumentResponse::from).toList(),
+                page.getTotal(), pageNo, pageSize);
     }
 
     @Transactional
@@ -54,7 +56,8 @@ public class DocumentService {
             document.setUploadTime(LocalDateTime.now());
             document.setParseStatus("PENDING");
             document.setFactCount(0);
-            return DocumentResponse.from(documentRepository.save(document));
+            insert(document);
+            return DocumentResponse.from(document);
         } catch (RuntimeException exception) {
             storageService.deleteQuietly(stored.path());
             throw exception;
@@ -78,7 +81,8 @@ public class DocumentService {
             document.setUploadTime(LocalDateTime.now());
             document.setParseStatus("PENDING");
             document.setFactCount(0);
-            return DocumentResponse.from(documentRepository.save(document));
+            insert(document);
+            return DocumentResponse.from(document);
         } catch (RuntimeException exception) {
             storageService.deleteQuietly(stored.path());
             throw exception;
@@ -99,8 +103,17 @@ public class DocumentService {
     }
 
     public DocumentRecord require(String documentId) {
-        return documentRepository.findById(documentId)
-                .orElseThrow(() -> new BusinessException(
-                        HttpStatus.NOT_FOUND, ErrorCode.RESOURCE_NOT_FOUND, "文档不存在"));
+        DocumentRecord document = documentMapper.selectById(documentId);
+        if (document == null) {
+            throw new BusinessException(HttpStatus.NOT_FOUND, ErrorCode.RESOURCE_NOT_FOUND, "文档不存在");
+        }
+        return document;
+    }
+
+    private void insert(DocumentRecord document) {
+        if (documentMapper.insert(document) != 1) {
+            throw new BusinessException(
+                    HttpStatus.SERVICE_UNAVAILABLE, ErrorCode.SERVICE_UNAVAILABLE, "文档信息保存失败");
+        }
     }
 }

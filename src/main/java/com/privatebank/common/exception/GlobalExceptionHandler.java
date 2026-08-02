@@ -7,7 +7,6 @@ import org.slf4j.MDC;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
@@ -43,11 +42,6 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AccessDeniedException.class)
     ResponseEntity<ApiError> handleDenied(AccessDeniedException exception) {
         return error(HttpStatus.FORBIDDEN, ErrorCode.ACCESS_DENIED, "无权执行该操作", Map.of());
-    }
-
-    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
-    ResponseEntity<ApiError> handleOptimistic(ObjectOptimisticLockingFailureException exception) {
-        return error(HttpStatus.CONFLICT, ErrorCode.STATE_CONFLICT, "资源已被其他请求更新，请刷新后重试", Map.of());
     }
 
     @ExceptionHandler(DataIntegrityViolationException.class)

@@ -5,9 +5,10 @@ spring:
     password:
   flyway:
     enabled: false
-  jpa:
-    hibernate:
-      ddl-auto: create-drop
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    default-enum-type-handler: org.apache.ibatis.type.EnumTypeHandler
 private-bank:
   security:
     jwt:

@@ -1,9 +1,8 @@
 package com.privatebank.auth.domain;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -11,14 +10,11 @@ import lombok.Setter;
 @Getter
 @Setter
 @NoArgsConstructor
-@Entity
-@Table(name = "sys_role")
+@TableName("sys_role")
 public class SysRole {
 
-    @Id
-    @Column(name = "role_id", length = 64, nullable = false)
+    @TableId(value = "role_id", type = IdType.INPUT)
     private String roleId;
 
-    @Column(name = "role_name", length = 32, nullable = false, unique = true)
     private String roleName;
 }

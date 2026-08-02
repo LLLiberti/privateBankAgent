@@ -4,11 +4,13 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.privatebank.common.api.PageResponse;
 import com.privatebank.common.exception.BusinessException;
 import com.privatebank.common.exception.ErrorCode;
 import com.privatebank.common.idempotency.IdempotencyExecutor;
-import com.privatebank.customer.repository.CustomerDataRepository;
+import com.privatebank.customer.mapper.CustomerDataMapper;
 import com.privatebank.document.application.FileStorageService;
 import com.privatebank.security.CurrentUserPrincipal;
 import com.privatebank.security.CurrentUserService;
@@ -32,16 +34,14 @@ import com.privatebank.workflow.domain.ReviewStatus;
 import com.privatebank.workflow.domain.WorkflowReview;
 import com.privatebank.workflow.domain.WorkflowState;
 import com.privatebank.workflow.domain.WorkflowStatus;
-import com.privatebank.workflow.repository.AgentArtifactRepository;
-import com.privatebank.workflow.repository.AgentStateRepository;
-import com.privatebank.workflow.repository.WorkflowReviewRepository;
-import com.privatebank.workflow.repository.WorkflowStateRepository;
+import com.privatebank.workflow.mapper.AgentArtifactMapper;
+import com.privatebank.workflow.mapper.AgentStateMapper;
+import com.privatebank.workflow.mapper.WorkflowReviewMapper;
+import com.privatebank.workflow.mapper.WorkflowStateMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -61,11 +61,11 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class WorkflowService {
 
-    private final WorkflowStateRepository workflowRepository;
-    private final AgentStateRepository agentStateRepository;
-    private final AgentArtifactRepository artifactRepository;
-    private final WorkflowReviewRepository reviewRepository;
-    private final CustomerDataRepository customerDataRepository;
+    private final WorkflowStateMapper workflowMapper;
+    private final AgentStateMapper agentStateMapper;
+    private final AgentArtifactMapper artifactMapper;
+    private final WorkflowReviewMapper reviewMapper;
+    private final CustomerDataMapper customerDataMapper;
     private final CurrentUserService currentUserService;
     private final IdempotencyExecutor idempotencyExecutor;
     private final WorkflowEventHub eventHub;
@@ -82,7 +82,7 @@ public class WorkflowService {
 
     private WorkflowCreatedResponse createOnce(CurrentUserPrincipal principal, CreateWorkflowRequest request) {
         currentUserService.requireCustomerAccess(principal, request.customerId());
-        if (customerDataRepository.findSummary(request.customerId()).isEmpty()) {
+        if (customerDataMapper.findSummary(request.customerId()) == null) {
             throw notFound("客户不存在");
         }
         if (request.asOfDate().isAfter(java.time.LocalDate.now())) {
@@ -100,7 +100,7 @@ public class WorkflowService {
         workflow.setVersion(0L);
         workflow.setCreatedAt(now);
         workflow.setUpdatedAt(now);
-        workflowRepository.save(workflow);
+        workflowMapper.insert(workflow);
 
         List<AgentState> states = new ArrayList<>();
         for (AgentType type : AgentType.values()) {
@@ -113,7 +113,7 @@ public class WorkflowService {
             state.setVersion(0L);
             states.add(state);
         }
-        agentStateRepository.saveAll(states);
+        states.forEach(agentStateMapper::insert);
         afterCommit(() -> {
             eventPublisher.publishEvent(new WorkflowCreatedEvent(workflow.getWorkflowId()));
             eventHub.publish(workflow.getWorkflowId(), "WORKFLOW_CREATED",
@@ -125,7 +125,9 @@ public class WorkflowService {
     @Transactional(readOnly = true)
     public WorkflowDetailResponse detail(CurrentUserPrincipal principal, String workflowId) {
         WorkflowState workflow = requireAccessible(principal, workflowId);
-        List<AgentStateResponse> states = agentStateRepository.findByWorkflowIdOrderByAgentType(workflowId)
+        List<AgentStateResponse> states = agentStateMapper.selectList(Wrappers.<AgentState>lambdaQuery()
+                        .eq(AgentState::getWorkflowId, workflowId)
+                        .orderByAsc(AgentState::getAgentType))
                 .stream().map(AgentStateResponse::from).toList();
         return WorkflowDetailResponse.from(workflow, states);
     }
@@ -134,12 +136,13 @@ public class WorkflowService {
     public PageResponse<ArtifactRefResponse> artifacts(
             CurrentUserPrincipal principal, String workflowId, AgentType agentType, int pageNo, int pageSize) {
         requireAccessible(principal, workflowId);
-        var pageable = PageRequest.of(pageNo - 1, pageSize, Sort.by(Sort.Direction.DESC, "createTime"));
-        var page = agentType == null
-                ? artifactRepository.findByWorkflowId(workflowId, pageable)
-                : artifactRepository.findByWorkflowIdAndAgentType(workflowId, agentType, pageable);
-        return PageResponse.of(page.getContent().stream().map(ArtifactRefResponse::from).toList(),
-                page.getTotalElements(), pageNo, pageSize);
+        var query = Wrappers.<AgentArtifact>lambdaQuery()
+                .eq(AgentArtifact::getWorkflowId, workflowId)
+                .eq(agentType != null, AgentArtifact::getAgentType, agentType)
+                .orderByDesc(AgentArtifact::getCreateTime);
+        Page<AgentArtifact> page = artifactMapper.selectPage(new Page<>(pageNo, pageSize), query);
+        return PageResponse.of(page.getRecords().stream().map(ArtifactRefResponse::from).toList(),
+                page.getTotal(), pageNo, pageSize);
     }
 
     @Transactional
@@ -159,8 +162,10 @@ public class WorkflowService {
         if (workflow.getWorkflowStatus() != WorkflowStatus.WAITING_INPUT) {
             throw conflict("当前工作流不接受人工输入");
         }
-        AgentArtifact current = artifactRepository.findById(request.currentArtifactId())
-                .orElseThrow(() -> notFound("当前Artifact不存在"));
+        AgentArtifact current = artifactMapper.selectById(request.currentArtifactId());
+        if (current == null) {
+            throw notFound("当前Artifact不存在");
+        }
         if (!workflowId.equals(current.getWorkflowId()) || current.getAgentType() != AgentType.CUSTOMER_INSIGHT) {
             throw new BusinessException(HttpStatus.CONFLICT, ErrorCode.STALE_ARTIFACT, "当前Artifact不属于该工作流的KYC结果");
         }
@@ -172,7 +177,7 @@ public class WorkflowService {
         }
         workflow.setWorkflowStatus(WorkflowStatus.RUNNING);
         workflow.setUpdatedAt(LocalDateTime.now());
-        workflowRepository.save(workflow);
+        updateWorkflow(workflow);
         afterCommit(() -> eventHub.publish(workflowId, "WORKFLOW_INPUT_PROVIDED",
                 Map.of("workflowId", workflowId, "status", workflow.getWorkflowStatus(), "action", request.action())));
         return detail(principal, workflowId);
@@ -201,9 +206,11 @@ public class WorkflowService {
         }
         verifyComplianceTargetsCfs(compliance, cfs);
 
-        int round = reviewRepository.findFirstByWorkflowIdOrderByReviewRoundDesc(workflowId)
-                .map(review -> review.getReviewRound() + 1)
-                .orElse(1);
+        WorkflowReview latestReview = reviewMapper.selectOne(Wrappers.<WorkflowReview>lambdaQuery()
+                .eq(WorkflowReview::getWorkflowId, workflowId)
+                .orderByDesc(WorkflowReview::getReviewRound)
+                .last("LIMIT 1"));
+        int round = latestReview == null ? 1 : latestReview.getReviewRound() + 1;
         WorkflowReview review = new WorkflowReview();
         review.setWorkflowId(workflowId);
         review.setReviewerId(principal.userId());
@@ -215,7 +222,7 @@ public class WorkflowService {
         review.setReviewRound(round);
         review.setVersion(0L);
         review.setReviewTime(LocalDateTime.now());
-        reviewRepository.save(review);
+        reviewMapper.insert(review);
 
         if (request.decision() == ReviewRequest.Decision.APPROVE) {
             workflow.setWorkflowStatus(WorkflowStatus.GENERATING_OUTPUT);
@@ -224,7 +231,7 @@ public class WorkflowService {
             ready(workflowId, AgentType.SOLUTION_DESIGN, true);
         }
         workflow.setUpdatedAt(LocalDateTime.now());
-        workflowRepository.save(workflow);
+        updateWorkflow(workflow);
         afterCommit(() -> eventHub.publish(workflowId,
                 request.decision() == ReviewRequest.Decision.APPROVE ? "REVIEW_APPROVED" : "REVIEW_REJECTED",
                 Map.of("workflowId", workflowId, "reviewRound", round, "status", workflow.getWorkflowStatus())));
@@ -252,7 +259,7 @@ public class WorkflowService {
         workflow.setErrorMessage(request.reason());
         workflow.setFinishTime(LocalDateTime.now());
         workflow.setUpdatedAt(LocalDateTime.now());
-        workflowRepository.save(workflow);
+        updateWorkflow(workflow);
         afterCommit(() -> eventHub.publish(workflowId, "WORKFLOW_CANCELED",
                 Map.of("workflowId", workflowId, "status", WorkflowStatus.CANCELED)));
         return new WorkflowCreatedResponse(workflowId, WorkflowStatus.CANCELED);
@@ -287,9 +294,14 @@ public class WorkflowService {
             throw new BusinessException(HttpStatus.UNPROCESSABLE_ENTITY,
                     ErrorCode.PRECONDITION_FAILED, "工作流尚未产生最终结果");
         }
-        AgentArtifact cfs = artifactRepository.findFirstByWorkflowIdAndAgentTypeOrderByVersionDesc(
-                        workflowId, AgentType.SOLUTION_DESIGN)
-                .orElseThrow(() -> notFound("最终CFS不存在"));
+        AgentArtifact cfs = artifactMapper.selectOne(Wrappers.<AgentArtifact>lambdaQuery()
+                .eq(AgentArtifact::getWorkflowId, workflowId)
+                .eq(AgentArtifact::getAgentType, AgentType.SOLUTION_DESIGN)
+                .orderByDesc(AgentArtifact::getVersion)
+                .last("LIMIT 1"));
+        if (cfs == null) {
+            throw notFound("最终CFS不存在");
+        }
         return new WorkflowResultResponse(cfs.getArtifactId(), cfs.getVersion(), extractFiles(cfs));
     }
 
@@ -315,15 +327,19 @@ public class WorkflowService {
     }
 
     public WorkflowState requireAccessible(CurrentUserPrincipal principal, String workflowId) {
-        WorkflowState workflow = workflowRepository.findById(workflowId)
-                .orElseThrow(() -> notFound("工作流不存在"));
+        WorkflowState workflow = workflowMapper.selectById(workflowId);
+        if (workflow == null) {
+            throw notFound("工作流不存在");
+        }
         currentUserService.requireCustomerAccess(principal, workflow.getPersonId());
         return workflow;
     }
 
     private AgentArtifact requireArtifact(String workflowId, String artifactId, AgentType type) {
-        AgentArtifact artifact = artifactRepository.findById(artifactId)
-                .orElseThrow(() -> notFound("Artifact不存在"));
+        AgentArtifact artifact = artifactMapper.selectById(artifactId);
+        if (artifact == null) {
+            throw notFound("Artifact不存在");
+        }
         if (!workflowId.equals(artifact.getWorkflowId()) || artifact.getAgentType() != type) {
             throw new BusinessException(HttpStatus.CONFLICT, ErrorCode.STALE_ARTIFACT, "Artifact与当前工作流或阶段不匹配");
         }
@@ -346,8 +362,12 @@ public class WorkflowService {
     }
 
     private void ready(String workflowId, AgentType type, boolean newExecution) {
-        AgentState state = agentStateRepository.findByWorkflowIdAndAgentType(workflowId, type)
-                .orElseThrow(() -> notFound("Agent状态不存在"));
+        AgentState state = agentStateMapper.selectOne(Wrappers.<AgentState>lambdaQuery()
+                .eq(AgentState::getWorkflowId, workflowId)
+                .eq(AgentState::getAgentType, type));
+        if (state == null) {
+            throw notFound("Agent状态不存在");
+        }
         state.setAgentStatus(AgentStatus.READY);
         state.setErrorCode(null);
         state.setErrorMessage(null);
@@ -356,7 +376,15 @@ public class WorkflowService {
         if (newExecution) {
             state.setExecutionId("EXE-" + UUID.randomUUID());
         }
-        agentStateRepository.save(state);
+        if (agentStateMapper.updateById(state) != 1) {
+            throw conflict("Agent状态已被其他请求更新，请刷新后重试");
+        }
+    }
+
+    private void updateWorkflow(WorkflowState workflow) {
+        if (workflowMapper.updateById(workflow) != 1) {
+            throw conflict("工作流已被其他请求更新，请刷新后重试");
+        }
     }
 
     private List<Map<String, Object>> extractFiles(AgentArtifact artifact) {

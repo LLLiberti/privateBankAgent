@@ -1,11 +1,12 @@
 package com.privatebank.auth.application;
 
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.privatebank.auth.api.LoginRequest;
 import com.privatebank.auth.api.LoginResponse;
 import com.privatebank.auth.api.UserProfileResponse;
 import com.privatebank.auth.domain.RoleName;
 import com.privatebank.auth.domain.SysUser;
-import com.privatebank.auth.repository.SysUserRepository;
+import com.privatebank.auth.mapper.SysUserMapper;
 import com.privatebank.common.exception.BusinessException;
 import com.privatebank.common.exception.ErrorCode;
 import com.privatebank.security.CurrentUserPrincipal;
@@ -22,15 +23,18 @@ import java.util.List;
 @RequiredArgsConstructor
 public class AuthService {
 
-    private final SysUserRepository userRepository;
+    private final SysUserMapper userMapper;
     private final PasswordEncoder passwordEncoder;
     private final CurrentUserService currentUserService;
     private final JwtService jwtService;
 
     public LoginResponse login(LoginRequest request) {
         String account = request.account().trim();
-        SysUser user = userRepository.findByUserAccountIgnoreCase(account)
-                .orElseThrow(this::invalidCredentials);
+        SysUser user = userMapper.selectOne(Wrappers.<SysUser>lambdaQuery()
+                .apply("LOWER(`userAccount`) = LOWER({0})", account));
+        if (user == null) {
+            throw invalidCredentials();
+        }
         if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
             throw invalidCredentials();
         }
