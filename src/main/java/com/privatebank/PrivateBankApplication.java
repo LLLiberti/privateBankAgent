@@ -1,7 +1,7 @@
 package com.privatebank;
 
-import com.privatebank.config.JwtProperties;
-import com.privatebank.config.StorageProperties;
+import com.privatebank.business.config.JwtProperties;
+import com.privatebank.business.config.StorageProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
