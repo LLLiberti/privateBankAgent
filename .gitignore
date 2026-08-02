@@ -1,0 +1,11 @@
+target/
+.idea/
+*.iml
+.env
+.env.*
+!.env.example
+storage/
+logs/
+src/main/resources/db/migration/*.sql
+docs/
+*.docx
