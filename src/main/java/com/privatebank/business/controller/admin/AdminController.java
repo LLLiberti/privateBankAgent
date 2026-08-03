@@ -9,7 +9,7 @@ import com.privatebank.business.dto.common.PageResponse;
 import com.privatebank.business.dto.document.DocumentResponse;
 import com.privatebank.business.service.document.DocumentService;
 import com.privatebank.business.security.CurrentUserPrincipal;
-import com.privatebank.business.entity.workflow.WorkflowStatus;
+import com.privatebank.business.enums.workflow.WorkflowStatus;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;

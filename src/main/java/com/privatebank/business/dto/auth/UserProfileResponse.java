@@ -1,6 +1,6 @@
 package com.privatebank.business.dto.auth;
 
-import com.privatebank.business.entity.auth.RoleName;
+import com.privatebank.business.enums.auth.RoleName;
 
 import java.util.List;
 

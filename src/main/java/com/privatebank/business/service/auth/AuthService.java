@@ -4,7 +4,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.privatebank.business.dto.auth.LoginRequest;
 import com.privatebank.business.dto.auth.LoginResponse;
 import com.privatebank.business.dto.auth.UserProfileResponse;
-import com.privatebank.business.entity.auth.RoleName;
+import com.privatebank.business.enums.auth.RoleName;
 import com.privatebank.business.entity.auth.SysUser;
 import com.privatebank.business.mapper.auth.SysUserMapper;
 import com.privatebank.business.common.exception.BusinessException;

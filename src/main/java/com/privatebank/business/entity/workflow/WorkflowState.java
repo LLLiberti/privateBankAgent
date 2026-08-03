@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.baomidou.mybatisplus.annotation.Version;
+import com.privatebank.business.enums.workflow.WorkflowStatus;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;

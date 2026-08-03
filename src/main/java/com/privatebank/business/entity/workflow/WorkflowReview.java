@@ -2,6 +2,7 @@ package com.privatebank.business.entity.workflow;
 
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.baomidou.mybatisplus.annotation.Version;
+import com.privatebank.business.enums.workflow.ReviewStatus;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;

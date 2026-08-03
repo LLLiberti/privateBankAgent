@@ -1,7 +1,8 @@
 package com.privatebank.business.dto.workflow;
 
 import com.privatebank.business.entity.workflow.WorkflowState;
-import com.privatebank.business.entity.workflow.WorkflowStatus;
+import com.privatebank.business.enums.workflow.WorkflowStatus;
+import com.privatebank.business.enums.workflow.AgentStatus;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -23,8 +24,8 @@ public record WorkflowDetailResponse(
 
     public static WorkflowDetailResponse from(WorkflowState workflow, List<AgentStateResponse> states) {
         String currentStage = states.stream()
-                .filter(state -> state.agentStatus() == com.privatebank.business.entity.workflow.AgentStatus.RUNNING
-                        || state.agentStatus() == com.privatebank.business.entity.workflow.AgentStatus.READY)
+                .filter(state -> state.agentStatus() == AgentStatus.RUNNING
+                        || state.agentStatus() == AgentStatus.READY)
                 .map(state -> state.agentType().name())
                 .findFirst()
                 .orElse(workflow.getWorkflowStatus().name());
