@@ -25,6 +25,15 @@ spring:
       password: ${PRIVATE_BANK_NEO4J_PASSWORD:}
     database: ${PRIVATE_BANK_NEO4J_DATABASE:}
   ai:
+    dashscope:
+      api-key: ${PRIVATE_BANK_DASHSCOPE_API_KEY:}
+      chat:
+        options:
+          model: ${PRIVATE_BANK_DASHSCOPE_CHAT_MODEL:qwen-plus}
+      embedding:
+        options:
+          model: ${PRIVATE_BANK_DASHSCOPE_EMBEDDING_MODEL:text-embedding-v4}
+          dimensions: ${PRIVATE_BANK_DASHSCOPE_EMBEDDING_DIMENSIONS:1024}
     vectorstore:
       qdrant:
         host: ${PRIVATE_BANK_QDRANT_HOST:}
