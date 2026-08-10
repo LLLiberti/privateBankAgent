@@ -1,0 +1,23 @@
+{
+  "customer": {"unified_id": "C-0001", "name_masked": "张**", "segment": "enterprise_owner", "consent_scope": ["visit_preparation", "cfs_draft"]},
+  "entities": [
+    {"id": "E-001", "type": "Enterprise", "name": "华东智造有限公司", "industry": "高端装备"},
+    {"id": "P-002", "type": "FamilyMember", "name_masked": "李**", "relation": "spouse", "consent_scope": ["family_overview"]}
+  ],
+  "relations": [
+    {"from": "C-0001", "type": "CONTROLS", "to": "E-001", "evidence_ids": ["EV-001"], "confidence": 0.98}
+  ],
+  "events": [
+    {"id": "EVT-001", "type": "financing", "occurred_at": "2026-06-15", "entity_id": "E-001", "evidence_ids": ["EV-002"]},
+    {"id": "EVT-002", "type": "product_maturity", "occurred_at": "2026-07-31", "entity_id": "C-0001", "evidence_ids": ["EV-003"]}
+  ],
+  "evidence": [
+    {"evidence_id": "EV-001", "source_tier": "P0", "observed_at": "2026-06-20", "confidence": 0.98, "report_eligible": true},
+    {"evidence_id": "EV-002", "source_tier": "P0", "observed_at": "2026-06-16", "confidence": 0.95, "report_eligible": true},
+    {"evidence_id": "EV-003", "source_tier": "internal", "observed_at": "2026-07-01", "confidence": 0.99, "report_eligible": true}
+  ],
+  "rule_outputs": [
+    {"rule_id": "R01", "need_type": "liquidity_planning", "scenario": "enterprise_owner_integrated_finance", "confidence": "medium", "evidence_ids": ["EV-002"], "requires_human_confirmation": true},
+    {"rule_id": "R04", "need_type": "idle_fund_management", "scenario": "asset_allocation_review", "confidence": "high", "evidence_ids": ["EV-003"], "requires_human_confirmation": true}
+  ]
+}
