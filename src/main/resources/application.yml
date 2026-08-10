@@ -14,6 +14,26 @@ spring:
     baseline-on-migrate: true
     baseline-version: 0
     locations: classpath:db/migration
+  elasticsearch:
+    uris: ${PRIVATE_BANK_ES_URIS:}
+    username: ${PRIVATE_BANK_ES_USERNAME:}
+    password: ${PRIVATE_BANK_ES_PASSWORD:}
+  neo4j:
+    uri: ${PRIVATE_BANK_NEO4J_URI:}
+    authentication:
+      username: ${PRIVATE_BANK_NEO4J_USERNAME:}
+      password: ${PRIVATE_BANK_NEO4J_PASSWORD:}
+    database: ${PRIVATE_BANK_NEO4J_DATABASE:}
+  ai:
+    vectorstore:
+      qdrant:
+        host: ${PRIVATE_BANK_QDRANT_HOST:}
+        port: ${PRIVATE_BANK_QDRANT_PORT:6334}
+        api-key: ${PRIVATE_BANK_QDRANT_API_KEY:}
+        collection-name: ${PRIVATE_BANK_QDRANT_COLLECTION:}
+        content-field-name: ${PRIVATE_BANK_QDRANT_CONTENT_FIELD:doc_content}
+        use-tls: ${PRIVATE_BANK_QDRANT_USE_TLS:false}
+        initialize-schema: ${PRIVATE_BANK_QDRANT_INITIALIZE_SCHEMA:false}
   servlet:
     multipart:
       max-file-size: 20MB
