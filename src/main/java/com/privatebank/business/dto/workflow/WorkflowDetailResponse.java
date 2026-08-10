@@ -11,6 +11,7 @@ import java.util.List;
 public record WorkflowDetailResponse(
         String workflowId,
         Long customerId,
+        Long importBatchId,
         WorkflowStatus workflowStatus,
         String currentStage,
         Long version,
@@ -30,7 +31,8 @@ public record WorkflowDetailResponse(
                 .findFirst()
                 .orElse(workflow.getWorkflowStatus().name());
         return new WorkflowDetailResponse(
-                workflow.getWorkflowId(), workflow.getPersonId(), workflow.getWorkflowStatus(), currentStage,
+                workflow.getWorkflowId(), workflow.getPersonId(), workflow.getImportBatchId(),
+                workflow.getWorkflowStatus(), currentStage,
                 workflow.getVersion(), workflow.getAsOfDate(), workflow.getTemplateId(), states,
                 workflow.getErrorCode(), workflow.getErrorMessage(), workflow.getStartTime(), workflow.getFinishTime());
     }

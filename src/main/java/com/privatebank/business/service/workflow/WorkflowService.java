@@ -76,7 +76,8 @@ public class WorkflowService {
     @Transactional
     public WorkflowCreatedResponse create(
             CurrentUserPrincipal principal, String idempotencyKey, CreateWorkflowRequest request) {
-        String key = principal.userId() + ":workflow:create:" + request.customerId() + ":" + idempotencyKey;
+        String key = principal.userId() + ":workflow:create:" + request.customerId() + ":"
+                + request.importBatchId() + ":" + idempotencyKey;
         return idempotencyExecutor.execute(key, () -> createOnce(principal, request));
     }
 
@@ -92,6 +93,7 @@ public class WorkflowService {
         WorkflowState workflow = new WorkflowState();
         workflow.setWorkflowId("WF-" + UUID.randomUUID());
         workflow.setPersonId(request.customerId());
+        workflow.setImportBatchId(request.importBatchId());
         workflow.setCreatedBy(principal.userId());
         workflow.setAsOfDate(request.asOfDate());
         workflow.setTemplateId(request.templateId());

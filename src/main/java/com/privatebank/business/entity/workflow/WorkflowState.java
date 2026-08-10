@@ -23,6 +23,8 @@ public class WorkflowState {
 
     private Long personId;
 
+    private Long importBatchId;
+
     private String createdBy;
 
     private LocalDate asOfDate;
