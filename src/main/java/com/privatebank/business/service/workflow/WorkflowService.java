@@ -116,11 +116,9 @@ public class WorkflowService {
             states.add(state);
         }
         states.forEach(agentStateMapper::insert);
-        afterCommit(() -> {
-            eventPublisher.publishEvent(new WorkflowCreatedEvent(workflow.getWorkflowId()));
-            eventHub.publish(workflow.getWorkflowId(), "WORKFLOW_CREATED",
-                    Map.of("workflowId", workflow.getWorkflowId(), "status", workflow.getWorkflowStatus()));
-        });
+        eventPublisher.publishEvent(new WorkflowCreatedEvent(workflow.getWorkflowId()));
+        afterCommit(() -> eventHub.publish(workflow.getWorkflowId(), "WORKFLOW_CREATED",
+                Map.of("workflowId", workflow.getWorkflowId(), "status", workflow.getWorkflowStatus())));
         return new WorkflowCreatedResponse(workflow.getWorkflowId(), workflow.getWorkflowStatus());
     }
 

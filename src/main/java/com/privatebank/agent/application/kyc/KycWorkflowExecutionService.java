@@ -7,12 +7,14 @@ import com.privatebank.agent.domain.kyc.KycMaskedInput;
 import com.privatebank.agent.infrastructure.kyc.KycCustomerDataLoader;
 import com.privatebank.agent.infrastructure.kyc.KycWorkflowStateService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class KycWorkflowExecutionService {
 
     private static final String OUTPUT_CONTRACT_ERROR = "KYC_OUTPUT_CONTRACT_INVALID";
@@ -39,7 +41,17 @@ public class KycWorkflowExecutionService {
         } catch (KycGenerationException exception) {
             workflowStateService.fail(claim, OUTPUT_CONTRACT_ERROR, "KYC 分析结果未通过格式或脱敏校验");
         } catch (RuntimeException exception) {
+            log.warn("KYC model invocation failed for workflow {}: rootCauseType={}", workflowId,
+                    rootCause(exception).getClass().getSimpleName());
             workflowStateService.fail(claim, MODEL_CALL_ERROR, "KYC 模型调用失败，请稍后重试");
         }
+    }
+
+    private Throwable rootCause(Throwable exception) {
+        Throwable current = exception;
+        while (current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+        }
+        return current;
     }
 }

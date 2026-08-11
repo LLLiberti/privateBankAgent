@@ -9,6 +9,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -33,7 +34,7 @@ class KycAnalysisGeneratorTest {
 
         KycGenerationResult result = generator(client).generate(input());
 
-        assertThat(calls).hasValue(2);
+        assertThat(calls).hasValue(3);
         assertThat(result.attempts()).isEqualTo(2);
         assertThat(result.modelName()).isEqualTo("fake-deepseek");
         assertThat(objectMapper.readTree(result.analysisJson()).fieldNames())
@@ -53,8 +54,53 @@ class KycAnalysisGeneratorTest {
 
         KycGenerationResult result = generator(client).generate(input());
 
-        assertThat(calls).hasValue(2);
+        assertThat(calls).hasValue(3);
         assertThat(result.analysisJson()).doesNotContain("张三");
+    }
+
+    @Test
+    void reviewsTheValidatedDraftBeforeReturningIt() {
+        AtomicInteger calls = new AtomicInteger();
+        AtomicReference<String> reviewPrompt = new AtomicReference<>();
+        KycModelClient client = new KycModelClient() {
+            @Override
+            public String generate(String systemPrompt, String userPrompt) {
+                if (calls.incrementAndGet() == 2) {
+                    reviewPrompt.set(userPrompt);
+                    return validResult("复核后的结论");
+                }
+                return validResult("候选结论");
+            }
+        };
+
+        KycGenerationResult result = generator(client).generate(input());
+
+        assertThat(calls).hasValue(2);
+        assertThat(result.attempts()).isEqualTo(1);
+        assertThat(result.analysisJson()).contains("复核后的结论");
+        assertThat(reviewPrompt.get()).contains("最终复核者", "候选结论", "逐项审计");
+    }
+
+    @Test
+    void regeneratesWhenTheFinalReviewDoesNotPassValidation() {
+        AtomicInteger calls = new AtomicInteger();
+        KycModelClient client = new KycModelClient() {
+            @Override
+            public String generate(String systemPrompt, String userPrompt) {
+                return switch (calls.incrementAndGet()) {
+                    case 1 -> validResult("候选结论");
+                    case 2 -> validResult("张三出现在复核结果中");
+                    case 3 -> validResult("重新生成的候选结论");
+                    default -> validResult("最终复核结论");
+                };
+            }
+        };
+
+        KycGenerationResult result = generator(client).generate(input());
+
+        assertThat(calls).hasValue(4);
+        assertThat(result.attempts()).isEqualTo(2);
+        assertThat(result.analysisJson()).contains("最终复核结论").doesNotContain("张三");
     }
 
     private KycAnalysisGenerator generator(KycModelClient client) {

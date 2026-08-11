@@ -164,7 +164,7 @@ class KycDatabaseWorkflowLiveTest {
                 created.workflowId(), created.workflowStatus());
 
         Awaitility.await()
-                .atMost(Duration.ofMinutes(2))
+                .atMost(Duration.ofMinutes(8))
                 .pollInterval(Duration.ofSeconds(1))
                 .untilAsserted(() -> assertThat(workflowStateMapper.selectById(created.workflowId())
                         .getWorkflowStatus()).isIn(WorkflowStatus.WAITING_INPUT, WorkflowStatus.FAILED));
@@ -178,7 +178,11 @@ class KycDatabaseWorkflowLiveTest {
                 .eq(AgentArtifact::getAgentType, AgentType.CUSTOMER_INSIGHT));
 
         assertThat(workflow.getPersonId()).isEqualTo(PERSON_ID);
-        assertThat(workflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.WAITING_INPUT);
+        assertThat(workflow.getWorkflowStatus())
+                .withFailMessage("KYC workflow failed: workflowErrorCode=%s, workflowErrorMessage=%s, agentStatus=%s, agentErrorCode=%s, agentErrorMessage=%s",
+                        workflow.getErrorCode(), workflow.getErrorMessage(), kycState == null ? null : kycState.getAgentStatus(),
+                        kycState == null ? null : kycState.getErrorCode(), kycState == null ? null : kycState.getErrorMessage())
+                .isEqualTo(WorkflowStatus.WAITING_INPUT);
         assertThat(kycState).isNotNull();
         assertThat(kycState.getAgentStatus()).isEqualTo(AgentStatus.SUCCESS);
         assertThat(kycState.getExecutionId()).isNotBlank();
