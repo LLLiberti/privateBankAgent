@@ -12,6 +12,7 @@ import com.privatebank.agent.application.kyc.KycOutputValidator;
 import com.privatebank.agent.application.kyc.KycWorkflowExecutionService;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
 import com.privatebank.business.common.idempotency.IdempotencyExecutor;
+import com.privatebank.business.config.MybatisPlusConfig;
 import com.privatebank.business.config.StorageProperties;
 import com.privatebank.business.dto.workflow.CreateWorkflowRequest;
 import com.privatebank.business.dto.workflow.WorkflowCreatedResponse;
@@ -38,7 +39,6 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
-import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.model.deepseek.autoconfigure.DeepSeekChatAutoConfiguration;
 import org.springframework.ai.model.tool.autoconfigure.ToolCallingAutoConfiguration;
@@ -51,6 +51,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 import org.springframework.core.env.PropertySource;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.test.context.ContextConfiguration;
@@ -189,7 +190,7 @@ class KycDatabaseWorkflowLiveTest {
     }
 
     @Configuration(proxyBeanMethods = false)
-    @MapperScan(basePackages = "com.privatebank.business.mapper")
+    @Import(MybatisPlusConfig.class)
     @EnableConfigurationProperties(StorageProperties.class)
     @ImportAutoConfiguration({
             DataSourceAutoConfiguration.class,
