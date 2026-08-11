@@ -86,7 +86,7 @@ public class SecurityConfig {
 
     @Bean
     CorsConfigurationSource corsConfigurationSource(
-            @Value("${private-bank.cors.allowed-origins:http://localhost:3000,http://localhost:5173}")
+            @Value("${private-bank.cors.allowed-origins:http://localhost:3000,http://localhost:5173,http://127.0.0.1:5173}")
             List<String> allowedOrigins) {
         CorsConfiguration configuration = new CorsConfiguration();
         configuration.setAllowedOrigins(allowedOrigins);
