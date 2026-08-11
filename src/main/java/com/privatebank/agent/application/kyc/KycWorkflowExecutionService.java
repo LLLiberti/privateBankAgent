@@ -2,6 +2,7 @@ package com.privatebank.agent.application.kyc;
 
 import com.privatebank.agent.domain.kyc.KycGenerationException;
 import com.privatebank.agent.domain.kyc.KycGenerationResult;
+import com.privatebank.agent.domain.kyc.KycInputValidationException;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
 import com.privatebank.agent.infrastructure.kyc.KycCustomerDataLoader;
 import com.privatebank.agent.infrastructure.kyc.KycWorkflowStateService;
@@ -15,6 +16,7 @@ import java.util.Optional;
 public class KycWorkflowExecutionService {
 
     private static final String OUTPUT_CONTRACT_ERROR = "KYC_OUTPUT_CONTRACT_INVALID";
+    private static final String INPUT_CONTRACT_ERROR = "KYC_MASKED_INPUT_INVALID";
     private static final String MODEL_CALL_ERROR = "KYC_MODEL_CALL_FAILED";
 
     private final KycWorkflowStateService workflowStateService;
@@ -32,6 +34,8 @@ public class KycWorkflowExecutionService {
             KycMaskedInput input = dataMaskingService.mask(customerDataLoader.load(claim.personId()));
             KycGenerationResult result = analysisGenerator.generate(input);
             workflowStateService.complete(claim, input, result);
+        } catch (KycInputValidationException exception) {
+            workflowStateService.fail(claim, INPUT_CONTRACT_ERROR, "KYC 脱敏输入未通过出站安全校验");
         } catch (KycGenerationException exception) {
             workflowStateService.fail(claim, OUTPUT_CONTRACT_ERROR, "KYC 分析结果未通过格式或脱敏校验");
         } catch (RuntimeException exception) {

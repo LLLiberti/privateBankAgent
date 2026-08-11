@@ -2,14 +2,17 @@ package com.privatebank.agent.application.kyc;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.privatebank.agent.domain.kyc.KycCustomerData;
+import com.privatebank.agent.domain.kyc.KycInputValidationException;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
 import com.privatebank.business.dto.customer.CustomerSummaryResponse;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class KycDataMaskingServiceTest {
 
@@ -17,43 +20,122 @@ class KycDataMaskingServiceTest {
     private final KycDataMaskingService maskingService = new KycDataMaskingService(objectMapper);
 
     @Test
-    void allowsOnlyAnalysisFieldsAndReplacesSourceIdsWithAliases() throws Exception {
-        KycCustomerData data = new KycCustomerData(
-                new CustomerSummaryResponse(88L, "张三", "张总", "ENTREPRENEUR", "VERIFIED", "MEDIUM"),
-                Map.of("birth_year", 1980, "native_place", "上海", "source_id", 101L),
-                List.of(Map.of("organization_name", "海川投资", "position_title", "董事", "source_id", 102L)),
-                List.of(),
-                List.of(Map.of("fact_category", "ASSET", "amount", 1000000, "source_id", 103L,
-                        "description", "银行卡尾号 1234")),
-                List.of(),
-                List.of(),
-                List.of(),
-                List.of(Map.of("note_text", "手机号 13800138000", "note_type", "PREFERENCE", "source_id", 104L)),
-                List.of(Map.of("enterprise_name", "星海集团", "stock_code", "600001", "relation_type", "CONTROLLER",
-                        "industry_name", "制造业", "source_id", 105L, "raw_text", "原始关系描述")),
-                List.of(Map.of("business_line", "工业自动化", "source_id", 105L)),
-                List.of(),
-                List.of(),
-                List.of(),
-                List.of(Map.of("member_name", "李四", "public_disclosure_level", "RESTRICTED", "source_id", 106L)),
-                List.of(Map.of("relation_type", "SPOUSE", "source_id", 106L)),
-                List.of(),
-                List.of(Map.of("organization_name", "某商会", "organization_type", "CHAMBER", "source_id", 107L)),
-                List.of(),
-                List.of(),
-                List.of());
+    void projectsFourDimensionsIntoAliasesAndControlledSemanticCodes() throws Exception {
+        KycCustomerData data = sampleData();
 
         KycMaskedInput input = maskingService.mask(data);
         String payload = objectMapper.writeValueAsString(input.payload());
 
-        assertThat(payload).contains("\"sourceRef\":\"SRC-1\"");
-        assertThat(input.evidenceReferences()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                "SRC-1", 101L, "SRC-2", 102L, "SRC-3", 103L, "SRC-4", 104L,
-                "SRC-5", 105L, "SRC-6", 106L, "SRC-7", 107L));
+        assertThat(input.payload()).containsEntry("contractVersion", "kyc-input.v2");
         assertThat(input.sha256()).matches("[0-9a-f]{64}");
+        assertThat(input.evidenceReferences()).containsKeys("SRC-1", "SRC-2", "SRC-3", "SRC-4", "SRC-5");
+
+        Map<String, Object> enterprise = section(input, "enterprise");
+        assertThat(records(enterprise, "relations").getFirst()).containsEntry("enterpriseAlias", "E-1");
+        assertThat(records(enterprise, "businesses").getFirst())
+                .containsEntry("enterpriseAlias", "E-1")
+                .containsEntry("businessCategories", List.of("CLOUD_COMPUTING", "ARTIFICIAL_INTELLIGENCE"));
+        assertThat(records(enterprise, "events").getFirst())
+                .containsEntry("enterpriseAlias", "E-1")
+                .containsEntry("eventSignals", List.of("SHARE_REPURCHASE", "AI_STRATEGY"));
+        assertThat(records(enterprise, "marketRelations").getFirst())
+                .containsEntry("enterpriseAlias", "E-1")
+                .containsEntry("counterpartyAlias", "C-1");
+
+        Map<String, Object> person = section(input, "person");
+        assertThat(records(person, "interactionSignals").getFirst())
+                .containsEntry("personAlias", "P-1")
+                .containsEntry("topicCodes", List.of("LONG_TERM_PLANNING", "DIGITAL_TECHNOLOGY", "PHILANTHROPY"));
+
+        Map<String, Object> family = section(input, "family");
+        assertThat(records(family, "members").getFirst()).containsEntry("familyAlias", "F-1");
+        assertThat(records(family, "relations").getFirst()).containsEntry("familyAlias", "F-1");
+
+        Map<String, Object> social = section(input, "social");
+        assertThat(records(social, "relations").getFirst()).containsEntry("organizationAlias", "O-2");
+        assertThat(records(social, "activities").getFirst())
+                .containsEntry("activitySignals", List.of("PHILANTHROPY", "EDUCATION_SUPPORT"));
+        assertThat(records(social, "reputationRisks").getFirst())
+                .containsEntry("riskCategories", List.of("ANTITRUST", "DATA_SECURITY"));
+
         assertThat(payload).doesNotContain(
-                "张三", "张总", "上海", "海川投资", "星海集团", "600001", "李四", "某商会",
-                "13800138000", "原始关系描述", "银行卡尾号");
-        assertThat(payload).contains("ENTREPRENEUR", "制造业", "工业自动化", "CONTROLLER");
+                "马化腾", "腾讯", "深圳", "某慈善基金会", "某竞争企业", "张三",
+                "长期关注人工智能和公益", "云与人工智能业务", "实施股权回购并加大人工智能投入",
+                "涉及反垄断和数据安全的监管关注", "13800138000", "原始备注");
+        assertThat(payload).doesNotContain("fullName", "enterpriseName", "organizationName", "noteText", "description");
+    }
+
+    @Test
+    void rejectsAnyAccidentalRawTextFieldAtTheModelBoundary() {
+        KycInputSafetyValidator validator = new KycInputSafetyValidator();
+
+        assertThatThrownBy(() -> validator.validate(
+                Map.of("contractVersion", "kyc-input.v2", "person", Map.of("noteText", "原始备注")), Set.of()))
+                .isInstanceOf(KycInputValidationException.class)
+                .hasMessageContaining("禁止字段");
+        assertThatThrownBy(() -> validator.validate(
+                Map.of("contractVersion", "kyc-input.v2", "person", Map.of("signal", "原始备注")), Set.of()))
+                .isInstanceOf(KycInputValidationException.class)
+                .hasMessageContaining("非受控文本");
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> section(KycMaskedInput input, String name) {
+        return (Map<String, Object>) input.payload().get(name);
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> records(Map<String, Object> section, String name) {
+        return (List<Map<String, Object>>) section.get(name);
+    }
+
+    private KycCustomerData sampleData() {
+        return new KycCustomerData(
+                new CustomerSummaryResponse(1L, "马化腾", "Pony", "ENTREPRENEUR", "VERIFIED", "MEDIUM"),
+                Map.ofEntries(Map.entry("birth_year", 1971), Map.entry("native_place", "深圳"), Map.entry("source_id", 101L)),
+                List.of(Map.ofEntries(
+                        Map.entry("organization_name", "腾讯科技"), Map.entry("position_title", "董事会主席"),
+                        Map.entry("start_date", "1998-11-01"), Map.entry("source_id", 102L),
+                        Map.entry("verification_status", "VERIFIED"))),
+                List.of(Map.ofEntries(Map.entry("risk_level", "MEDIUM"), Map.entry("max_drawdown", 0.15),
+                        Map.entry("source_id", 103L), Map.entry("verification_status", "VERIFIED"))),
+                List.of(Map.ofEntries(Map.entry("fact_category", "ASSET"), Map.entry("asset_type", "股权投资"),
+                        Map.entry("amount", 1000000), Map.entry("currency_code", "CNY"), Map.entry("source_id", 104L))),
+                List.of(Map.ofEntries(Map.entry("product_type", "私募基金"), Map.entry("amount", 200000),
+                        Map.entry("currency_code", "CNY"), Map.entry("source_id", 105L))),
+                List.of(),
+                List.of(),
+                List.of(Map.ofEntries(Map.entry("note_type", "PREFERENCE"),
+                        Map.entry("note_text", "长期关注人工智能和公益，原始备注"),
+                        Map.entry("is_explicit_expression", true), Map.entry("source_id", 106L))),
+                List.of(Map.ofEntries(Map.entry("enterprise_id", 501L), Map.entry("enterprise_name", "腾讯科技"),
+                        Map.entry("title", "董事会主席"), Map.entry("relation_type", "CONTROLLER"),
+                        Map.entry("industry_name", "互联网科技"), Map.entry("source_id", 201L))),
+                List.of(Map.ofEntries(Map.entry("enterprise_id", 501L), Map.entry("business_line", "云与人工智能业务"),
+                        Map.entry("business_description", "面向企业提供云计算和人工智能服务"), Map.entry("source_id", 202L))),
+                List.of(Map.ofEntries(Map.entry("enterprise_id", 501L), Map.entry("reporting_period", "2025"),
+                        Map.entry("metric_name", "REVENUE"), Map.entry("metric_value", 1000),
+                        Map.entry("unit_name", "CNY_100M"), Map.entry("source_id", 203L))),
+                List.of(Map.ofEntries(Map.entry("enterprise_id", 501L), Map.entry("event_type", "CORPORATE_ACTION"),
+                        Map.entry("event_description", "实施股权回购并加大人工智能投入"), Map.entry("risk_level", "MEDIUM"),
+                        Map.entry("source_id", 204L))),
+                List.of(Map.ofEntries(Map.entry("enterprise_id", 501L), Map.entry("counterpart_name", "某竞争企业"),
+                        Map.entry("relation_type", "COMPETITOR"), Map.entry("source_id", 205L))),
+                List.of(Map.ofEntries(Map.entry("family_member_id", 301L), Map.entry("member_name", "张三"),
+                        Map.entry("public_disclosure_level", "RESTRICTED"), Map.entry("source_id", 301L))),
+                List.of(Map.ofEntries(Map.entry("family_member_id", 301L), Map.entry("relation_type", "SPOUSE"),
+                        Map.entry("public_disclosure_level", "RESTRICTED"), Map.entry("source_id", 302L))),
+                List.of(Map.ofEntries(Map.entry("enterprise_id", 501L), Map.entry("arrangement_status", "DRAFT"),
+                        Map.entry("governance_model", "家族信托与董事会治理"), Map.entry("source_id", 303L))),
+                List.of(Map.ofEntries(Map.entry("social_organization_id", 601L), Map.entry("organization_name", "某慈善基金会"),
+                        Map.entry("organization_type", "FOUNDATION"), Map.entry("relation_type", "BOARD_MEMBER"),
+                        Map.entry("role_title", "理事"), Map.entry("source_id", 401L))),
+                List.of(Map.ofEntries(Map.entry("activity_type", "DONATION"), Map.entry("activity_description", "支持教育公益项目"),
+                        Map.entry("amount", 10), Map.entry("currency_code", "CNY"), Map.entry("source_id", 402L))),
+                List.of(Map.ofEntries(Map.entry("reputation_type", "MEDIA"), Map.entry("title", "全球科技企业家"),
+                        Map.entry("description", "具有全球影响力"), Map.entry("source_id", 403L))),
+                List.of(Map.ofEntries(Map.entry("risk_topic", "反垄断与数据安全"),
+                        Map.entry("risk_description", "涉及反垄断和数据安全的监管关注"),
+                        Map.entry("risk_level", "HIGH"), Map.entry("source_id", 404L))));
     }
 }
