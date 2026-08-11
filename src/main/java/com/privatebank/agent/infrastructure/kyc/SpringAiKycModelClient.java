@@ -1,5 +1,7 @@
-package com.privatebank.business.service.kyc;
+package com.privatebank.agent.infrastructure.kyc;
 
+import com.privatebank.agent.application.kyc.KycModelClient;
+import com.privatebank.agent.domain.kyc.KycModelInvocationException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;

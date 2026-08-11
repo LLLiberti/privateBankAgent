@@ -1,5 +1,7 @@
-package com.privatebank.business.service.kyc;
+package com.privatebank.agent.application.kyc;
 
+import com.privatebank.agent.domain.kyc.KycGenerationResult;
+import com.privatebank.agent.domain.kyc.KycMaskedInput;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;

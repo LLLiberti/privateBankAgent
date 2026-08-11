@@ -1,4 +1,4 @@
-package com.privatebank.business.service.kyc;
+package com.privatebank.agent.domain.kyc;
 
 import com.privatebank.business.dto.customer.CustomerSummaryResponse;
 

@@ -1,5 +1,6 @@
-package com.privatebank.business.service.kyc;
+package com.privatebank.agent.infrastructure.kyc;
 
+import com.privatebank.agent.domain.kyc.KycCustomerData;
 import com.privatebank.business.common.exception.BusinessException;
 import com.privatebank.business.common.exception.ErrorCode;
 import com.privatebank.business.dto.customer.CustomerSummaryResponse;

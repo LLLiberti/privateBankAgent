@@ -1,5 +1,10 @@
-package com.privatebank.business.service.kyc;
+package com.privatebank.agent.application.kyc;
 
+import com.privatebank.agent.domain.kyc.KycGenerationException;
+import com.privatebank.agent.domain.kyc.KycGenerationResult;
+import com.privatebank.agent.domain.kyc.KycMaskedInput;
+import com.privatebank.agent.domain.kyc.KycModelInvocationException;
+import com.privatebank.agent.domain.kyc.KycOutputValidationException;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;

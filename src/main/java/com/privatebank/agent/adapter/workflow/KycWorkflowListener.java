@@ -1,7 +1,8 @@
-package com.privatebank.business.service.workflow;
+package com.privatebank.agent.adapter.workflow;
 
-import com.privatebank.business.config.KycAsyncConfiguration;
-import com.privatebank.business.service.kyc.KycWorkflowExecutionService;
+import com.privatebank.agent.application.kyc.KycWorkflowExecutionService;
+import com.privatebank.agent.infrastructure.kyc.KycAsyncConfiguration;
+import com.privatebank.business.service.workflow.WorkflowCreatedEvent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;

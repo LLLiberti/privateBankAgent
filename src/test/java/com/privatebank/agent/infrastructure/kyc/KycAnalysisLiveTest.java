@@ -1,7 +1,12 @@
-package com.privatebank.business.service.kyc;
+package com.privatebank.agent.infrastructure.kyc;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.privatebank.agent.application.kyc.KycAnalysisGenerator;
+import com.privatebank.agent.application.kyc.KycModelClient;
+import com.privatebank.agent.application.kyc.KycOutputValidator;
+import com.privatebank.agent.domain.kyc.KycGenerationResult;
+import com.privatebank.agent.domain.kyc.KycMaskedInput;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -22,8 +27,8 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Calls the configured DeepSeek model. It is intentionally skipped unless the key is supplied
- * through the environment, so the normal test suite never sends data or consumes an API quota.
+ * Calls the configured DeepSeek model. It is skipped unless the key is supplied through the
+ * environment, so normal tests never send data or consume an API quota.
  */
 @Tag("live")
 @EnabledIfEnvironmentVariable(named = "PRIVATE_BANK_DEEPSEEK_API_KEY", matches = ".+")

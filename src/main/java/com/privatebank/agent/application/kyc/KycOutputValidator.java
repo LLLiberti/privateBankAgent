@@ -1,5 +1,7 @@
-package com.privatebank.business.service.kyc;
+package com.privatebank.agent.application.kyc;
 
+import com.privatebank.agent.domain.kyc.KycMaskedInput;
+import com.privatebank.agent.domain.kyc.KycOutputValidationException;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;

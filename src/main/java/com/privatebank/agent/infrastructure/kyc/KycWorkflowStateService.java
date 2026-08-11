@@ -1,9 +1,13 @@
-package com.privatebank.business.service.kyc;
+package com.privatebank.agent.infrastructure.kyc;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.privatebank.agent.application.kyc.KycExecutionClaim;
+import com.privatebank.agent.application.kyc.KycWorkflowStateConflictException;
+import com.privatebank.agent.domain.kyc.KycGenerationResult;
+import com.privatebank.agent.domain.kyc.KycMaskedInput;
 import com.privatebank.business.entity.workflow.AgentArtifact;
 import com.privatebank.business.entity.workflow.AgentState;
 import com.privatebank.business.entity.workflow.WorkflowState;

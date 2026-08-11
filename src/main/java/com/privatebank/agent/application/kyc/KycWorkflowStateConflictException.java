@@ -1,4 +1,4 @@
-package com.privatebank.business.service.kyc;
+package com.privatebank.agent.application.kyc;
 
 public class KycWorkflowStateConflictException extends RuntimeException {
 

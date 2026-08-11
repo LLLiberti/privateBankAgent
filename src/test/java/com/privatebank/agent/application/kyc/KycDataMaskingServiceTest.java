@@ -1,6 +1,8 @@
-package com.privatebank.business.service.kyc;
+package com.privatebank.agent.application.kyc;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.privatebank.agent.domain.kyc.KycCustomerData;
+import com.privatebank.agent.domain.kyc.KycMaskedInput;
 import com.privatebank.business.dto.customer.CustomerSummaryResponse;
 import org.junit.jupiter.api.Test;
 

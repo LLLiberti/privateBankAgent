@@ -1,5 +1,11 @@
-package com.privatebank.business.service.kyc;
+package com.privatebank.agent.application.kyc;
 
+import com.privatebank.agent.domain.kyc.KycCustomerData;
+import com.privatebank.agent.domain.kyc.KycGenerationException;
+import com.privatebank.agent.domain.kyc.KycGenerationResult;
+import com.privatebank.agent.domain.kyc.KycMaskedInput;
+import com.privatebank.agent.infrastructure.kyc.KycCustomerDataLoader;
+import com.privatebank.agent.infrastructure.kyc.KycWorkflowStateService;
 import com.privatebank.business.dto.customer.CustomerSummaryResponse;
 import org.junit.jupiter.api.Test;
 
