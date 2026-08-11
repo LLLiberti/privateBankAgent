@@ -25,16 +25,16 @@ spring:
       password: ${PRIVATE_BANK_NEO4J_PASSWORD:}
     database: ${PRIVATE_BANK_NEO4J_DATABASE:}
   ai:
-    dashscope:
-      api-key: ${PRIVATE_BANK_DASHSCOPE_API_KEY:}
+    model:
+      chat: deepseek
+    deepseek:
+      base-url: ${PRIVATE_BANK_DEEPSEEK_BASE_URL:https://api.deepseek.com}
+      api-key: ${PRIVATE_BANK_DEEPSEEK_API_KEY:}
       chat:
         options:
-          model: ${PRIVATE_BANK_DASHSCOPE_CHAT_MODEL:qwen-plus}
-      embedding:
-        options:
-          model: ${PRIVATE_BANK_DASHSCOPE_EMBEDDING_MODEL:text-embedding-v4}
-          dimensions: ${PRIVATE_BANK_DASHSCOPE_EMBEDDING_DIMENSIONS:1024}
+          model: ${PRIVATE_BANK_DEEPSEEK_CHAT_MODEL:deepseek-v4-flash}
     vectorstore:
+      type: none
       qdrant:
         host: ${PRIVATE_BANK_QDRANT_HOST:}
         port: ${PRIVATE_BANK_QDRANT_PORT:6334}
