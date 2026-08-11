@@ -78,6 +78,7 @@ class KycDatabaseWorkflowLiveTest {
 
     private static final long PERSON_ID = 1L;
     private static final long IMPORT_BATCH_ID = 1L;
+    private static final String CUSTOMER_MANAGER_ID = "USER-DEMO-CUSTOMER-MANAGER";
     private static final String API_KEY = configuredProperty("spring.ai.deepseek.api-key", "");
     private static final String BASE_URL = configuredProperty("spring.ai.deepseek.base-url", "https://api.deepseek.com");
     private static final String MODEL = configuredProperty("spring.ai.deepseek.chat.options.model", "deepseek-v4-flash");
@@ -137,7 +138,7 @@ class KycDatabaseWorkflowLiveTest {
 
         KycMaskedInput expectedMaskedInput = dataMaskingService.mask(customerDataLoader.load(PERSON_ID));
         WorkflowCreatedResponse created = workflowService.create(
-                new CurrentUserPrincipal("LIVE-KYC-TEST", "live-kyc-test", RoleName.SYSTEM_ADMIN),
+                new CurrentUserPrincipal(CUSTOMER_MANAGER_ID, "live-kyc-test", RoleName.CUSTOMER_MANAGER),
                 "live-kyc-" + UUID.randomUUID(),
                 new CreateWorkflowRequest(
                         PERSON_ID,
