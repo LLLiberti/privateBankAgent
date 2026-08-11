@@ -9,3 +9,5 @@ logs/
 src/main/resources/db/migration/*.sql
 docs/
 *.docx
+.vscode/
+src/main/resources/application.yml
