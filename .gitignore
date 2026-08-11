@@ -11,3 +11,4 @@ docs/
 *.docx
 .vscode/
 src/main/resources/application.yml
+sql/
