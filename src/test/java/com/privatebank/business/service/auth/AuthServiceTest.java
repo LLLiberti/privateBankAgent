@@ -1,7 +1,6 @@
 package com.privatebank.business.service.auth;
 
 import com.privatebank.business.common.exception.BusinessException;
-import com.privatebank.business.common.exception.ErrorCode;
 import com.privatebank.business.dto.auth.RegisterRequest;
 import com.privatebank.business.dto.auth.RegisterResponse;
 import com.privatebank.business.entity.auth.SysRole;
@@ -9,7 +8,6 @@ import com.privatebank.business.entity.auth.SysUser;
 import com.privatebank.business.enums.auth.RoleName;
 import com.privatebank.business.mapper.auth.SysRoleMapper;
 import com.privatebank.business.mapper.auth.SysUserMapper;
-import com.privatebank.business.security.CurrentUserPrincipal;
 import com.privatebank.business.security.CurrentUserService;
 import com.privatebank.business.security.JwtService;
 import org.junit.jupiter.api.Test;
@@ -51,7 +49,7 @@ class AuthServiceTest {
         when(passwordEncoder.encode("SecurePass1")).thenReturn("encoded-password");
 
         RegisterResponse response = authService.register(
-                new RegisterRequest(" manager-01 ", " Alice ", "SecurePass1", RoleName.CUSTOMER_MANAGER), null);
+                new RegisterRequest(" manager-01 ", " Alice ", "SecurePass1"));
 
         ArgumentCaptor<SysUser> userCaptor = ArgumentCaptor.forClass(SysUser.class);
         verify(userMapper).insert(userCaptor.capture());
@@ -65,39 +63,11 @@ class AuthServiceTest {
     }
 
     @Test
-    void rejectsAnonymousSystemAdminRegistration() {
-        assertThatThrownBy(() -> authService.register(
-                new RegisterRequest("admin-01", "Admin", "SecurePass1", RoleName.SYSTEM_ADMIN), null))
-                .isInstanceOfSatisfying(BusinessException.class, exception -> {
-                    assertThat(exception.getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
-                    assertThat(exception.getCode()).isEqualTo(ErrorCode.ACCESS_DENIED);
-                });
-
-        verify(userMapper, never()).selectOne(any());
-        verify(userMapper, never()).insert(any(SysUser.class));
-    }
-
-    @Test
-    void allowsSystemAdminToRegisterSystemAdmin() {
-        when(userMapper.selectOne(any())).thenReturn(null);
-        when(roleMapper.selectOne(any())).thenReturn(role("ROLE-SYSTEM-ADMIN", RoleName.SYSTEM_ADMIN));
-        when(passwordEncoder.encode("SecurePass1")).thenReturn("encoded-password");
-
-        authService.register(
-                new RegisterRequest("admin-01", "Admin", "SecurePass1", RoleName.SYSTEM_ADMIN),
-                new CurrentUserPrincipal("admin-id", "Current admin", RoleName.SYSTEM_ADMIN));
-
-        ArgumentCaptor<SysUser> userCaptor = ArgumentCaptor.forClass(SysUser.class);
-        verify(userMapper).insert(userCaptor.capture());
-        assertThat(userCaptor.getValue().getRoleId()).isEqualTo("ROLE-SYSTEM-ADMIN");
-    }
-
-    @Test
     void rejectsExistingAccount() {
         when(userMapper.selectOne(any())).thenReturn(new SysUser());
 
         assertThatThrownBy(() -> authService.register(
-                new RegisterRequest("manager-01", "Alice", "SecurePass1", RoleName.CUSTOMER_MANAGER), null))
+                new RegisterRequest("manager-01", "Alice", "SecurePass1")))
                 .isInstanceOfSatisfying(BusinessException.class,
                         exception -> assertThat(exception.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 

@@ -51,11 +51,7 @@ public class AuthService {
     }
 
     @Transactional
-    public RegisterResponse register(RegisterRequest request, CurrentUserPrincipal principal) {
-        if (request.role() == RoleName.SYSTEM_ADMIN && (principal == null || !principal.isSystemAdmin())) {
-            throw new BusinessException(HttpStatus.FORBIDDEN, ErrorCode.ACCESS_DENIED, "Only system administrators can register system administrators");
-        }
-
+    public RegisterResponse register(RegisterRequest request) {
         String account = request.account().trim();
         if (userMapper.selectOne(Wrappers.<SysUser>lambdaQuery()
                 .apply("LOWER(`userAccount`) = LOWER({0})", account)) != null) {
@@ -63,7 +59,7 @@ public class AuthService {
         }
 
         SysRole role = roleMapper.selectOne(Wrappers.<SysRole>lambdaQuery()
-                .eq(SysRole::getRoleName, request.role().name()));
+                .eq(SysRole::getRoleName, RoleName.CUSTOMER_MANAGER.name()));
         if (role == null) {
             throw new BusinessException(HttpStatus.SERVICE_UNAVAILABLE, ErrorCode.SERVICE_UNAVAILABLE, "Required system role is not configured");
         }
@@ -76,7 +72,7 @@ public class AuthService {
         user.setRoleId(role.getRoleId());
         userMapper.insert(user);
 
-        return new RegisterResponse(user.getUserId(), user.getUserAccount(), user.getUserName(), request.role());
+        return new RegisterResponse(user.getUserId(), user.getUserAccount(), user.getUserName(), RoleName.CUSTOMER_MANAGER);
     }
 
     public UserProfileResponse profile(CurrentUserPrincipal principal) {

@@ -33,10 +33,8 @@ public class AuthController {
 
     @PostMapping("/register")
     @ResponseStatus(HttpStatus.CREATED)
-    public RegisterResponse register(
-            @Valid @RequestBody RegisterRequest request,
-            @AuthenticationPrincipal CurrentUserPrincipal principal) {
-        return authService.register(request, principal);
+    public RegisterResponse register(@Valid @RequestBody RegisterRequest request) {
+        return authService.register(request);
     }
 
     @PostMapping("/logout")
