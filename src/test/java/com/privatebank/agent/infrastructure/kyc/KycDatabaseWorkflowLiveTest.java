@@ -10,6 +10,7 @@ import com.privatebank.agent.application.kyc.KycDataMaskingService;
 import com.privatebank.agent.application.kyc.KycModelClient;
 import com.privatebank.agent.application.kyc.KycOutputValidator;
 import com.privatebank.agent.application.kyc.KycWorkflowExecutionService;
+import com.privatebank.agent.domain.kyc.KycCustomerData;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
 import com.privatebank.business.common.idempotency.IdempotencyExecutor;
 import com.privatebank.business.config.MybatisPlusConfig;
@@ -62,7 +63,9 @@ import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 import java.io.IOException;
 import java.time.Duration;
 import java.time.LocalDate;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -137,7 +140,17 @@ class KycDatabaseWorkflowLiveTest {
                 .as("personId=1 must exist in the configured database")
                 .isNotNull();
 
-        KycMaskedInput expectedMaskedInput = dataMaskingService.mask(customerDataLoader.load(PERSON_ID));
+        KycCustomerData rawCustomerData = customerDataLoader.load(PERSON_ID);
+        Map<String, Object> rawKycInput = rawKycInput(rawCustomerData);
+        System.out.printf("%n[KYC agent runtime] phase=DATA_LOADED personId=%d decision=prepare-four-dimension-input%n"
+                        + "[KYC initial input] personEnterpriseFamilySocial=%s%n",
+                PERSON_ID, objectMapper.writeValueAsString(rawKycInput));
+
+        KycMaskedInput expectedMaskedInput = dataMaskingService.mask(rawCustomerData);
+        System.out.printf("[KYC agent runtime] phase=MASKING_COMPLETED evidenceRefCount=%d prohibitedTermCount=%d decision=invoke-model-with-masked-input-only%n"
+                        + "[KYC masked input] sha256=%s payload=%s%n",
+                expectedMaskedInput.evidenceReferences().size(), expectedMaskedInput.prohibitedTerms().size(),
+                expectedMaskedInput.sha256(), objectMapper.writeValueAsString(expectedMaskedInput.payload()));
         WorkflowCreatedResponse created = workflowService.create(
                 new CurrentUserPrincipal(CUSTOMER_MANAGER_ID, "live-kyc-test", RoleName.CUSTOMER_MANAGER),
                 "live-kyc-" + UUID.randomUUID(),
@@ -147,6 +160,8 @@ class KycDatabaseWorkflowLiveTest {
                         LocalDate.now(),
                         "KYC-LIVE-TEST",
                         "Execute the standard KYC analysis for the selected customer."));
+        System.out.printf("[KYC agent runtime] phase=WORKFLOW_CREATED workflowId=%s status=%s decision=wait-for-async-kyc%n",
+                created.workflowId(), created.workflowStatus());
 
         Awaitility.await()
                 .atMost(Duration.ofMinutes(2))
@@ -182,6 +197,8 @@ class KycDatabaseWorkflowLiveTest {
         for (String prohibitedValue : expectedMaskedInput.prohibitedTerms()) {
             assertThat(artifact.getResult()).doesNotContain(prohibitedValue);
         }
+        System.out.printf("[KYC agent runtime] phase=ARTIFACT_VALIDATED workflowId=%s agentStatus=%s decision=kyc-result-is-ready-for-manager-confirmation%n",
+                created.workflowId(), kycState.getAgentStatus());
 
         System.out.printf("%n[KYC database live test] workflowId=%s personId=%d workflowStatus=%s agentStatus=%s artifactId=%s%n"
                         + "[KYC database live test] maskedInput=%s%n[KYC database live test] savedAnalysis=%s%n",
@@ -189,6 +206,44 @@ class KycDatabaseWorkflowLiveTest {
                 objectMapper.writeValueAsString(expectedMaskedInput.payload()), analysis);
     }
 
+    private Map<String, Object> rawKycInput(KycCustomerData data) {
+        Map<String, Object> person = new LinkedHashMap<>();
+        person.put("summary", data.summary());
+        person.put("profile", data.profile());
+        person.put("careers", data.careers());
+        person.put("riskPreferences", data.riskPreferences());
+        person.put("financialFacts", data.financialFacts());
+        person.put("holdings", data.holdings());
+        person.put("financialEvents", data.financialEvents());
+        person.put("serviceRecords", data.serviceRecords());
+        person.put("interactionNotes", data.interactionNotes());
+
+        Map<String, Object> enterprise = new LinkedHashMap<>();
+        enterprise.put("relations", data.enterpriseRelations());
+        enterprise.put("businesses", data.enterpriseBusinesses());
+        enterprise.put("financialMetrics", data.enterpriseFinancialMetrics());
+        enterprise.put("events", data.enterpriseEvents());
+        enterprise.put("marketRelations", data.enterpriseMarketRelations());
+
+        Map<String, Object> family = new LinkedHashMap<>();
+        family.put("members", data.familyMembers());
+        family.put("relations", data.familyRelations());
+        family.put("successionArrangements", data.successionArrangements());
+
+        Map<String, Object> social = new LinkedHashMap<>();
+        social.put("relations", data.socialRelations());
+        social.put("activities", data.socialActivities());
+        social.put("publicReputations", data.publicReputations());
+        social.put("reputationRisks", data.reputationRisks());
+
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("person", person);
+        input.put("enterprise", enterprise);
+        input.put("family", family);
+        input.put("social", social);
+
+        return input;
+    }
     @Configuration(proxyBeanMethods = false)
     @Import(MybatisPlusConfig.class)
     @EnableConfigurationProperties(StorageProperties.class)
