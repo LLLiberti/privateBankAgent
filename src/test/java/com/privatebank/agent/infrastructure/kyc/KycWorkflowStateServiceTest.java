@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.privatebank.agent.application.kyc.KycExecutionClaim;
+import com.privatebank.agent.domain.event.AgentSucceededEvent;
 import com.privatebank.agent.domain.kyc.KycGenerationResult;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
 import com.privatebank.business.entity.workflow.AgentArtifact;
@@ -15,9 +16,9 @@ import com.privatebank.business.enums.workflow.WorkflowStatus;
 import com.privatebank.business.mapper.workflow.AgentArtifactMapper;
 import com.privatebank.business.mapper.workflow.AgentStateMapper;
 import com.privatebank.business.mapper.workflow.WorkflowStateMapper;
-import com.privatebank.business.service.workflow.WorkflowEventHub;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.LocalDateTime;
 import java.util.Map;
@@ -25,7 +26,6 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -35,13 +35,13 @@ class KycWorkflowStateServiceTest {
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     @Test
-    void persistsArtifactAndTransitionsWorkflowToKycConfirmation() throws Exception {
+    void persistsKycArtifactAndPublishesOutcomeWithoutAdvancingWorkflow() throws Exception {
         WorkflowStateMapper workflowMapper = mock(WorkflowStateMapper.class);
         AgentStateMapper agentStateMapper = mock(AgentStateMapper.class);
         AgentArtifactMapper artifactMapper = mock(AgentArtifactMapper.class);
-        WorkflowEventHub eventHub = mock(WorkflowEventHub.class);
+        ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
         KycWorkflowStateService service = new KycWorkflowStateService(
-                workflowMapper, agentStateMapper, artifactMapper, eventHub, objectMapper);
+                workflowMapper, agentStateMapper, artifactMapper, eventPublisher, objectMapper);
         WorkflowState workflow = workflow();
         AgentState agentState = readyAgentState();
         when(workflowMapper.selectById("WF-1")).thenReturn(workflow);
@@ -54,29 +54,17 @@ class KycWorkflowStateServiceTest {
         KycExecutionClaim claim = service.claim("WF-1").orElseThrow();
 
         assertThat(workflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
-        assertThat(workflow.getStartTime()).isNotNull();
-        assertThat(workflow.getErrorCode()).isNull();
-        assertThat(workflow.getErrorMessage()).isNull();
         assertThat(agentState.getAgentStatus()).isEqualTo(AgentStatus.RUNNING);
         assertThat(agentState.getExecutionId()).isEqualTo(claim.executionId());
-        assertThat(agentState.getStartTime()).isNotNull();
-        assertThat(agentState.getFinishTime()).isNull();
 
         boolean completed = service.complete(claim, maskedInput(), generationResult());
 
         assertThat(completed).isTrue();
-        assertThat(workflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.WAITING_INPUT);
-        assertThat(workflow.getStartTime()).isNotNull();
-        assertThat(workflow.getFinishTime()).isNull();
-        assertThat(workflow.getErrorCode()).isNull();
-        assertThat(workflow.getErrorMessage()).isNull();
+        assertThat(workflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
         assertThat(agentState.getAgentStatus()).isEqualTo(AgentStatus.SUCCESS);
         assertThat(agentState.getExecutionId()).isEqualTo(claim.executionId());
         assertThat(agentState.getRetryCount()).isEqualTo(1);
-        assertThat(agentState.getStartTime()).isNotNull();
         assertThat(agentState.getFinishTime()).isNotNull();
-        assertThat(agentState.getErrorCode()).isNull();
-        assertThat(agentState.getErrorMessage()).isNull();
 
         ArgumentCaptor<AgentArtifact> artifactCaptor = ArgumentCaptor.forClass(AgentArtifact.class);
         verify(artifactMapper).insert(artifactCaptor.capture());
@@ -89,7 +77,15 @@ class KycWorkflowStateServiceTest {
         JsonNode savedResult = objectMapper.readTree(artifact.getResult());
         assertThat(savedResult.path("maskingApplied").asBoolean()).isTrue();
         assertThat(savedResult.path("analysis").path("riskLevel").asText()).isEqualTo("MEDIUM");
-        verify(eventHub).publish(eq("WF-1"), eq("KYC_ANALYSIS_COMPLETED"), any(Map.class));
+
+        ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue()).isInstanceOf(AgentSucceededEvent.class);
+        AgentSucceededEvent event = (AgentSucceededEvent) eventCaptor.getValue();
+        assertThat(event.workflowId()).isEqualTo("WF-1");
+        assertThat(event.agentStateId()).isEqualTo("AS-1");
+        assertThat(event.executionId()).isEqualTo(claim.executionId());
+        assertThat(event.artifactId()).isEqualTo(artifact.getArtifactId());
     }
 
     private WorkflowState workflow() {
@@ -119,7 +115,7 @@ class KycWorkflowStateServiceTest {
 
     private KycGenerationResult generationResult() {
         return new KycGenerationResult(
-                "{\"riskLevel\":\"MEDIUM\",\"summary\":\"已脱敏分析\",\"findings\":[],\"riskAlerts\":[],\"recommendedActions\":[],\"dataGaps\":[]}",
+                "{\"riskLevel\":\"MEDIUM\",\"summary\":\"Masked analysis\",\"findings\":[],\"riskAlerts\":[],\"recommendedActions\":[],\"dataGaps\":[]}",
                 2,
                 "deepseek-v4-flash");
     }

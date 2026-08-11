@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.privatebank.agent.application.kyc.KycExecutionClaim;
 import com.privatebank.agent.application.kyc.KycWorkflowStateConflictException;
+import com.privatebank.agent.domain.event.AgentFailedEvent;
+import com.privatebank.agent.domain.event.AgentSucceededEvent;
 import com.privatebank.agent.domain.kyc.KycGenerationResult;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
 import com.privatebank.business.entity.workflow.AgentArtifact;
@@ -17,8 +19,8 @@ import com.privatebank.business.enums.workflow.WorkflowStatus;
 import com.privatebank.business.mapper.workflow.AgentArtifactMapper;
 import com.privatebank.business.mapper.workflow.AgentStateMapper;
 import com.privatebank.business.mapper.workflow.WorkflowStateMapper;
-import com.privatebank.business.service.workflow.WorkflowEventHub;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -29,6 +31,10 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+/**
+ * Persists KYC Agent execution state and its artifact.  It never advances the
+ * workflow after an Agent outcome; the workflow listener owns that transition.
+ */
 @Service
 @RequiredArgsConstructor
 public class KycWorkflowStateService {
@@ -36,7 +42,7 @@ public class KycWorkflowStateService {
     private final WorkflowStateMapper workflowMapper;
     private final AgentStateMapper agentStateMapper;
     private final AgentArtifactMapper artifactMapper;
-    private final WorkflowEventHub eventHub;
+    private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
 
     @Transactional
@@ -94,14 +100,9 @@ public class KycWorkflowStateService {
         state.setFinishTime(now);
         requireUpdated(agentStateMapper.updateById(state), "KYC Agent 状态已被并发修改");
 
-        workflow.setWorkflowStatus(WorkflowStatus.WAITING_INPUT);
-        workflow.setUpdatedAt(now);
-        requireUpdated(workflowMapper.updateById(workflow), "工作流状态已被并发修改");
-        afterCommit(() -> eventHub.publish(claim.workflowId(), "KYC_ANALYSIS_COMPLETED", Map.of(
-                "workflowId", claim.workflowId(),
-                "agentType", AgentType.CUSTOMER_INSIGHT,
-                "artifactId", artifact.getArtifactId(),
-                "status", WorkflowStatus.WAITING_INPUT)));
+        afterCommit(() -> eventPublisher.publishEvent(new AgentSucceededEvent(
+                claim.workflowId(), state.getAgentStateId(), AgentType.CUSTOMER_INSIGHT,
+                claim.executionId(), artifact.getArtifactId())));
         return true;
     }
 
@@ -119,17 +120,9 @@ public class KycWorkflowStateService {
         state.setFinishTime(now);
         requireUpdated(agentStateMapper.updateById(state), "KYC Agent 状态已被并发修改");
 
-        workflow.setWorkflowStatus(WorkflowStatus.FAILED);
-        workflow.setErrorCode(errorCode);
-        workflow.setErrorMessage(errorMessage);
-        workflow.setFinishTime(now);
-        workflow.setUpdatedAt(now);
-        requireUpdated(workflowMapper.updateById(workflow), "工作流状态已被并发修改");
-        afterCommit(() -> eventHub.publish(claim.workflowId(), "KYC_ANALYSIS_FAILED", Map.of(
-                "workflowId", claim.workflowId(),
-                "agentType", AgentType.CUSTOMER_INSIGHT,
-                "status", WorkflowStatus.FAILED,
-                "errorCode", errorCode)));
+        afterCommit(() -> eventPublisher.publishEvent(new AgentFailedEvent(
+                claim.workflowId(), state.getAgentStateId(), AgentType.CUSTOMER_INSIGHT,
+                claim.executionId(), errorCode)));
         return true;
     }
 
