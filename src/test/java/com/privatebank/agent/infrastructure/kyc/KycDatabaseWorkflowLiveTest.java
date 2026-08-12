@@ -69,9 +69,7 @@ import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 import java.io.IOException;
 import java.time.Duration;
 import java.time.LocalDate;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -151,11 +149,6 @@ class KycDatabaseWorkflowLiveTest {
                 .isNotNull();
 
         KycCustomerData rawCustomerData = customerDataLoader.load(PERSON_ID);
-        Map<String, Object> rawKycInput = rawKycInput(rawCustomerData);
-        System.out.printf("%n[KYC agent runtime] phase=DATA_LOADED personId=%d decision=prepare-four-dimension-input%n"
-                        + "[KYC initial input] personEnterpriseFamilySocial=%s%n",
-                PERSON_ID, objectMapper.writeValueAsString(rawKycInput));
-
         KycMaskedInput expectedMaskedInput = dataMaskingService.mask(rawCustomerData);
         System.out.printf("[KYC agent runtime] phase=MASKING_COMPLETED evidenceRefCount=%d prohibitedTermCount=%d decision=invoke-model-with-masked-input-only%n"
                         + "[KYC masked input] sha256=%s payload=%s%n",
@@ -368,44 +361,6 @@ class KycDatabaseWorkflowLiveTest {
                 .filter(state -> state.agentType() == agentType)
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("Missing agent state for " + agentType));
-    }
-
-    private Map<String, Object> rawKycInput(KycCustomerData data) {
-        Map<String, Object> person = new LinkedHashMap<>();
-        person.put("summary", data.summary());
-        person.put("profile", data.profile());
-        person.put("careers", data.careers());
-        person.put("riskPreferences", data.riskPreferences());
-        person.put("financialFacts", data.financialFacts());
-        person.put("holdings", data.holdings());
-        person.put("financialEvents", data.financialEvents());
-        person.put("serviceRecords", data.serviceRecords());
-        person.put("interactionNotes", data.interactionNotes());
-
-        Map<String, Object> enterprise = new LinkedHashMap<>();
-        enterprise.put("relations", data.enterpriseRelations());
-        enterprise.put("businesses", data.enterpriseBusinesses());
-        enterprise.put("financialMetrics", data.enterpriseFinancialMetrics());
-        enterprise.put("events", data.enterpriseEvents());
-        enterprise.put("marketRelations", data.enterpriseMarketRelations());
-
-        Map<String, Object> family = new LinkedHashMap<>();
-        family.put("members", data.familyMembers());
-        family.put("relations", data.familyRelations());
-        family.put("successionArrangements", data.successionArrangements());
-
-        Map<String, Object> social = new LinkedHashMap<>();
-        social.put("relations", data.socialRelations());
-        social.put("activities", data.socialActivities());
-        social.put("publicReputations", data.publicReputations());
-        social.put("reputationRisks", data.reputationRisks());
-
-        Map<String, Object> input = new LinkedHashMap<>();
-        input.put("person", person);
-        input.put("enterprise", enterprise);
-        input.put("family", family);
-        input.put("social", social);
-        return input;
     }
 
     @Configuration(proxyBeanMethods = false)
