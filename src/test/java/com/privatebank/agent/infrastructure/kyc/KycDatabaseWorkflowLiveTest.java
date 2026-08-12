@@ -5,6 +5,8 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.privatebank.agent.adapter.workflow.KycWorkflowListener;
+import com.privatebank.agent.application.kyc.KycRuntimeSupplement;
+import com.privatebank.agent.application.kyc.KycRuntimeSupplementProjector;
 import com.privatebank.agent.application.kyc.KycAnalysisGenerator;
 import com.privatebank.agent.application.kyc.KycDataMaskingService;
 import com.privatebank.agent.application.kyc.KycModelClient;
@@ -13,9 +15,13 @@ import com.privatebank.agent.application.kyc.KycWorkflowExecutionService;
 import com.privatebank.agent.domain.kyc.KycCustomerData;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
 import com.privatebank.business.common.idempotency.IdempotencyExecutor;
+import com.privatebank.business.common.exception.BusinessException;
+import com.privatebank.business.common.exception.ErrorCode;
 import com.privatebank.business.config.MybatisPlusConfig;
 import com.privatebank.business.config.StorageProperties;
 import com.privatebank.business.dto.workflow.CreateWorkflowRequest;
+import com.privatebank.business.dto.workflow.WorkflowDetailResponse;
+import com.privatebank.business.dto.workflow.WorkflowInputRequest;
 import com.privatebank.business.dto.workflow.WorkflowCreatedResponse;
 import com.privatebank.business.entity.workflow.AgentArtifact;
 import com.privatebank.business.entity.workflow.AgentState;
@@ -69,6 +75,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Explicitly enabled integration test against the configured database and model.
@@ -120,6 +127,9 @@ class KycDatabaseWorkflowLiveTest {
     private KycDataMaskingService dataMaskingService;
 
     @org.springframework.beans.factory.annotation.Autowired
+    private KycRuntimeSupplementProjector runtimeSupplementProjector;
+
+    @org.springframework.beans.factory.annotation.Autowired
     private WorkflowService workflowService;
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -135,7 +145,7 @@ class KycDatabaseWorkflowLiveTest {
     private ObjectMapper objectMapper;
 
     @Test
-    void createsAndExecutesKycWorkflowForDatabasePersonOne() throws Exception {
+    void executesManagerSupplementRegenerationAndApprovalFlowAgainstLiveDatabaseAndModel() throws Exception {
         assertThat(customerDataMapper.findSummary(PERSON_ID))
                 .as("personId=1 must exist in the configured database")
                 .isNotNull();
@@ -163,19 +173,9 @@ class KycDatabaseWorkflowLiveTest {
         System.out.printf("[KYC agent runtime] phase=WORKFLOW_CREATED workflowId=%s status=%s decision=wait-for-async-kyc%n",
                 created.workflowId(), created.workflowStatus());
 
-        Awaitility.await()
-                .atMost(Duration.ofMinutes(8))
-                .pollInterval(Duration.ofSeconds(1))
-                .untilAsserted(() -> assertThat(workflowStateMapper.selectById(created.workflowId())
-                        .getWorkflowStatus()).isIn(WorkflowStatus.WAITING_INPUT, WorkflowStatus.FAILED));
-
-        WorkflowState workflow = workflowStateMapper.selectById(created.workflowId());
-        AgentState kycState = agentStateMapper.selectOne(Wrappers.<AgentState>lambdaQuery()
-                .eq(AgentState::getWorkflowId, created.workflowId())
-                .eq(AgentState::getAgentType, AgentType.CUSTOMER_INSIGHT));
-        AgentArtifact artifact = artifactMapper.selectOne(Wrappers.<AgentArtifact>lambdaQuery()
-                .eq(AgentArtifact::getWorkflowId, created.workflowId())
-                .eq(AgentArtifact::getAgentType, AgentType.CUSTOMER_INSIGHT));
+        WorkflowState workflow = awaitKycOutcome(created.workflowId());
+        AgentState kycState = kycState(created.workflowId());
+        AgentArtifact artifact = latestKycArtifact(created.workflowId());
 
         assertThat(workflow.getPersonId()).isEqualTo(PERSON_ID);
         assertThat(workflow.getWorkflowStatus())
@@ -204,10 +204,170 @@ class KycDatabaseWorkflowLiveTest {
         System.out.printf("[KYC agent runtime] phase=ARTIFACT_VALIDATED workflowId=%s agentStatus=%s decision=kyc-result-is-ready-for-manager-confirmation%n",
                 created.workflowId(), kycState.getAgentStatus());
 
+        assertThatThrownBy(() -> workflowService.provideInput(
+                managerPrincipal(),
+                created.workflowId(),
+                "live-kyc-empty-supplement-" + UUID.randomUUID(),
+                new WorkflowInputRequest(WorkflowInputRequest.Action.SUPPLEMENT, artifact.getArtifactId(), " ", List.of())))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(exception -> assertThat(((BusinessException) exception).getCode())
+                        .isEqualTo(ErrorCode.INVALID_ARGUMENT));
+        assertThat(workflowStateMapper.selectById(created.workflowId()).getWorkflowStatus())
+                .isEqualTo(WorkflowStatus.WAITING_INPUT);
+        assertThat(kycArtifacts(created.workflowId())).hasSize(1);
+
+        String rawManagerSupplement = "LIVE_RUNTIME_SUPPLEMENT_DO_NOT_PERSIST_20260812";
+        List<String> confirmedItems = List.of("客户近期存在流动性安排需求");
+        KycRuntimeSupplement supplement = runtimeSupplementProjector.project(rawManagerSupplement, confirmedItems);
+        KycMaskedInput regeneratedMaskedInput = dataMaskingService.mask(rawCustomerData, supplement);
+        assertThat(supplement.signals()).contains("LIQUIDITY_NEED").doesNotContain(rawManagerSupplement);
+        assertThat(objectMapper.writeValueAsString(regeneratedMaskedInput.payload()))
+                .contains("managerSupplement", "LIQUIDITY_NEED")
+                .doesNotContain(rawManagerSupplement);
+
+        WorkflowDetailResponse supplementAccepted = workflowService.provideInput(
+                managerPrincipal(),
+                created.workflowId(),
+                "live-kyc-supplement-" + UUID.randomUUID(),
+                new WorkflowInputRequest(
+                        WorkflowInputRequest.Action.SUPPLEMENT,
+                        artifact.getArtifactId(),
+                        rawManagerSupplement,
+                        confirmedItems));
+        assertThat(supplementAccepted.workflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
+        assertThat(agentState(supplementAccepted, AgentType.CUSTOMER_INSIGHT).agentStatus()).isEqualTo(AgentStatus.READY);
+        System.out.printf("[KYC agent runtime] phase=MANAGER_SUPPLEMENT_ACCEPTED workflowId=%s decision=regenerate-kyc-with-runtime-only-signals%n",
+                created.workflowId());
+
+        WorkflowState regeneratedWorkflow = awaitKycOutcome(created.workflowId());
+        AgentState regeneratedKycState = kycState(created.workflowId());
+        AgentArtifact regeneratedArtifact = latestKycArtifact(created.workflowId());
+        assertThat(regeneratedWorkflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.WAITING_INPUT);
+        assertThat(regeneratedWorkflow.getAnalysisRequirements())
+                .isEqualTo("Execute the standard KYC analysis for the selected customer.")
+                .doesNotContain(rawManagerSupplement);
+        assertThat(regeneratedKycState.getAgentStatus()).isEqualTo(AgentStatus.SUCCESS);
+        assertThat(regeneratedArtifact.getVersion()).isEqualTo(2);
+        assertThat(regeneratedArtifact.getArtifactId()).isNotEqualTo(artifact.getArtifactId());
+        assertThat(regeneratedArtifact.getExecutionId()).isEqualTo(regeneratedKycState.getExecutionId())
+                .isNotEqualTo(kycState.getExecutionId());
+        assertThat(kycArtifacts(created.workflowId())).extracting(AgentArtifact::getVersion)
+                .containsExactly(1, 2);
+        JsonNode regeneratedResult = objectMapper.readTree(regeneratedArtifact.getResult());
+        assertThat(regeneratedResult.path("maskedInputSha256").asText()).isEqualTo(regeneratedMaskedInput.sha256());
+        assertKycArtifactIsSafeAndContractValid(regeneratedArtifact, regeneratedMaskedInput, rawManagerSupplement);
+        System.out.printf("[KYC agent runtime] phase=KYC_REGENERATED workflowId=%s artifactId=%s version=%d decision=manager-can-approve-latest-kyc%n",
+                created.workflowId(), regeneratedArtifact.getArtifactId(), regeneratedArtifact.getVersion());
+
+        assertThatThrownBy(() -> workflowService.provideInput(
+                managerPrincipal(),
+                created.workflowId(),
+                "live-kyc-stale-approval-" + UUID.randomUUID(),
+                new WorkflowInputRequest(WorkflowInputRequest.Action.CONTINUE, artifact.getArtifactId(), null, List.of())))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(exception -> assertThat(((BusinessException) exception).getCode())
+                        .isEqualTo(ErrorCode.STALE_ARTIFACT));
+        assertThat(workflowStateMapper.selectById(created.workflowId()).getWorkflowStatus())
+                .isEqualTo(WorkflowStatus.WAITING_INPUT);
+        assertThat(agentState(created.workflowId(), AgentType.MARKET_INSIGHT).getAgentStatus()).isEqualTo(AgentStatus.PENDING);
+        assertThat(agentState(created.workflowId(), AgentType.PRODUCT_EXPERT).getAgentStatus()).isEqualTo(AgentStatus.PENDING);
+
+        WorkflowDetailResponse approvalAccepted = workflowService.provideInput(
+                managerPrincipal(),
+                created.workflowId(),
+                "live-kyc-approval-" + UUID.randomUUID(),
+                new WorkflowInputRequest(
+                        WorkflowInputRequest.Action.CONTINUE,
+                        regeneratedArtifact.getArtifactId(),
+                        null,
+                        List.of()));
+        assertThat(approvalAccepted.workflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
+        assertThat(agentState(approvalAccepted, AgentType.MARKET_INSIGHT).agentStatus()).isEqualTo(AgentStatus.READY);
+        assertThat(agentState(approvalAccepted, AgentType.PRODUCT_EXPERT).agentStatus()).isEqualTo(AgentStatus.READY);
+
+        WorkflowState approvedWorkflow = workflowStateMapper.selectById(created.workflowId());
+        assertThat(approvedWorkflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
+        assertThat(agentState(created.workflowId(), AgentType.MARKET_INSIGHT).getAgentStatus()).isEqualTo(AgentStatus.READY);
+        assertThat(agentState(created.workflowId(), AgentType.PRODUCT_EXPERT).getAgentStatus()).isEqualTo(AgentStatus.READY);
+        assertThat(kycArtifacts(created.workflowId())).extracting(AgentArtifact::getVersion)
+                .containsExactly(1, 2);
+        System.out.printf("[KYC agent runtime] phase=MANAGER_APPROVED workflowId=%s decision=downstream-agents-ready%n",
+                created.workflowId());
+
         System.out.printf("%n[KYC database live test] workflowId=%s personId=%d workflowStatus=%s agentStatus=%s artifactId=%s%n"
-                        + "[KYC database live test] maskedInput=%s%n[KYC database live test] savedAnalysis=%s%n",
-                created.workflowId(), PERSON_ID, workflow.getWorkflowStatus(), kycState.getAgentStatus(), artifact.getArtifactId(),
-                objectMapper.writeValueAsString(expectedMaskedInput.payload()), analysis);
+                        + "[KYC database live test] maskedInput=%s%n[KYC database live test] savedAnalysis=%s%n"
+                        +"[KYC 结果] kycResult artifact=%s",
+                created.workflowId(), PERSON_ID, approvedWorkflow.getWorkflowStatus(), regeneratedKycState.getAgentStatus(), regeneratedArtifact.getArtifactId(),
+                objectMapper.writeValueAsString(expectedMaskedInput.payload()), analysis, artifact);
+    }
+
+    private CurrentUserPrincipal managerPrincipal() {
+        return new CurrentUserPrincipal(CUSTOMER_MANAGER_ID, "live-kyc-test", RoleName.CUSTOMER_MANAGER);
+    }
+
+    private WorkflowState awaitKycOutcome(String workflowId) {
+        Awaitility.await()
+                .atMost(Duration.ofMinutes(8))
+                .pollInterval(Duration.ofSeconds(1))
+                .untilAsserted(() -> assertThat(workflowStateMapper.selectById(workflowId).getWorkflowStatus())
+                        .isIn(WorkflowStatus.WAITING_INPUT, WorkflowStatus.FAILED));
+        WorkflowState workflow = workflowStateMapper.selectById(workflowId);
+        AgentState state = kycState(workflowId);
+        assertThat(workflow.getWorkflowStatus())
+                .withFailMessage("KYC workflow failed: workflowErrorCode=%s, workflowErrorMessage=%s, agentStatus=%s, agentErrorCode=%s, agentErrorMessage=%s",
+                        workflow.getErrorCode(), workflow.getErrorMessage(), state == null ? null : state.getAgentStatus(),
+                        state == null ? null : state.getErrorCode(), state == null ? null : state.getErrorMessage())
+                .isEqualTo(WorkflowStatus.WAITING_INPUT);
+        return workflow;
+    }
+
+    private AgentState kycState(String workflowId) {
+        return agentState(workflowId, AgentType.CUSTOMER_INSIGHT);
+    }
+
+    private AgentState agentState(String workflowId, AgentType agentType) {
+        return agentStateMapper.selectOne(Wrappers.<AgentState>lambdaQuery()
+                .eq(AgentState::getWorkflowId, workflowId)
+                .eq(AgentState::getAgentType, agentType));
+    }
+
+    private AgentArtifact latestKycArtifact(String workflowId) {
+        return artifactMapper.selectOne(Wrappers.<AgentArtifact>lambdaQuery()
+                .eq(AgentArtifact::getWorkflowId, workflowId)
+                .eq(AgentArtifact::getAgentType, AgentType.CUSTOMER_INSIGHT)
+                .orderByDesc(AgentArtifact::getVersion)
+                .last("LIMIT 1"));
+    }
+
+    private List<AgentArtifact> kycArtifacts(String workflowId) {
+        return artifactMapper.selectList(Wrappers.<AgentArtifact>lambdaQuery()
+                .eq(AgentArtifact::getWorkflowId, workflowId)
+                .eq(AgentArtifact::getAgentType, AgentType.CUSTOMER_INSIGHT)
+                .orderByAsc(AgentArtifact::getVersion));
+    }
+
+    private void assertKycArtifactIsSafeAndContractValid(
+            AgentArtifact artifact, KycMaskedInput maskedInput, String rawManagerSupplement) throws Exception {
+        assertThat(artifact).isNotNull();
+        JsonNode result = objectMapper.readTree(artifact.getResult());
+        JsonNode analysis = result.path("analysis");
+        assertThat(result.path("maskingApplied").asBoolean()).isTrue();
+        assertThat(result.path("maskedInputSha256").asText()).isEqualTo(maskedInput.sha256());
+        assertThat(result.path("model").asText()).isEqualTo(MODEL);
+        assertThat(analysis.fieldNames()).toIterable().containsExactlyInAnyOrder(
+                "riskLevel", "summary", "findings", "riskAlerts", "recommendedActions", "dataGaps");
+        assertThat(artifact.getResult()).doesNotContain(rawManagerSupplement);
+        for (String prohibitedValue : maskedInput.prohibitedTerms()) {
+            assertThat(artifact.getResult()).doesNotContain(prohibitedValue);
+        }
+    }
+
+    private com.privatebank.business.dto.workflow.AgentStateResponse agentState(
+            WorkflowDetailResponse workflow, AgentType agentType) {
+        return workflow.agentStates().stream()
+                .filter(state -> state.agentType() == agentType)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("Missing agent state for " + agentType));
     }
 
     private Map<String, Object> rawKycInput(KycCustomerData data) {
@@ -245,9 +405,9 @@ class KycDatabaseWorkflowLiveTest {
         input.put("enterprise", enterprise);
         input.put("family", family);
         input.put("social", social);
-
         return input;
     }
+
     @Configuration(proxyBeanMethods = false)
     @Import(MybatisPlusConfig.class)
     @EnableConfigurationProperties(StorageProperties.class)
@@ -319,8 +479,15 @@ class KycDatabaseWorkflowLiveTest {
         }
 
         @Bean
-        KycWorkflowListener kycWorkflowListener(KycWorkflowExecutionService executionService) {
-            return new KycWorkflowListener(executionService);
+        KycRuntimeSupplementProjector kycRuntimeSupplementProjector() {
+            return new KycRuntimeSupplementProjector();
+        }
+
+        @Bean
+        KycWorkflowListener kycWorkflowListener(
+                KycWorkflowExecutionService executionService,
+                KycRuntimeSupplementProjector runtimeSupplementProjector) {
+            return new KycWorkflowListener(executionService, runtimeSupplementProjector);
         }
 
         @Bean
