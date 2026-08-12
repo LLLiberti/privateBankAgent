@@ -77,6 +77,7 @@ class KycWorkflowStateServiceTest {
         JsonNode savedResult = objectMapper.readTree(artifact.getResult());
         assertThat(savedResult.path("maskingApplied").asBoolean()).isTrue();
         assertThat(savedResult.path("analysis").path("riskLevel").asText()).isEqualTo("MEDIUM");
+        assertThat(savedResult.toString()).doesNotContain("managerSupplement", "客户经理补充的原始内容");
 
         ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
         verify(eventPublisher).publishEvent(eventCaptor.capture());
@@ -110,7 +111,9 @@ class KycWorkflowStateServiceTest {
     }
 
     private KycMaskedInput maskedInput() {
-        return new KycMaskedInput(Map.of("person", Map.of()), Map.of("SRC-1", 1001L), Set.of(), "a".repeat(64));
+        return new KycMaskedInput(
+                Map.of("person", Map.of(), "managerSupplement", Map.of("signals", Set.of("LIQUIDITY_NEED"))),
+                Map.of("SRC-1", 1001L), Set.of("客户经理补充的原始内容"), "a".repeat(64));
     }
 
     private KycGenerationResult generationResult() {

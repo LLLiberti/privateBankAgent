@@ -35,7 +35,7 @@ class KycWorkflowExecutionServiceTest {
         KycGenerationResult result = new KycGenerationResult(validResult(), 1, "fake-deepseek");
         when(stateService.claim("WF-1")).thenReturn(Optional.of(claim));
         when(loader.load(100L)).thenReturn(data);
-        when(maskingService.mask(data)).thenReturn(input);
+        when(maskingService.mask(eq(data), eq(KycRuntimeSupplement.empty()))).thenReturn(input);
         when(generator.generate(input)).thenReturn(result);
 
         service.execute("WF-1");
@@ -56,7 +56,7 @@ class KycWorkflowExecutionServiceTest {
         KycMaskedInput input = new KycMaskedInput(Map.of("person", Map.of()), Map.of(), Set.of(), "c".repeat(64));
         when(stateService.claim("WF-2")).thenReturn(Optional.of(claim));
         when(loader.load(101L)).thenReturn(data);
-        when(maskingService.mask(data)).thenReturn(input);
+        when(maskingService.mask(eq(data), eq(KycRuntimeSupplement.empty()))).thenReturn(input);
         when(generator.generate(input)).thenThrow(new KycGenerationException("格式错误", null));
 
         service.execute("WF-2");

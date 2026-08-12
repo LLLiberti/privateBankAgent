@@ -27,13 +27,17 @@ public class KycWorkflowExecutionService {
     private final KycAnalysisGenerator analysisGenerator;
 
     public void execute(String workflowId) {
+        execute(workflowId, KycRuntimeSupplement.empty());
+    }
+
+    public void execute(String workflowId, KycRuntimeSupplement supplement) {
         Optional<KycExecutionClaim> optionalClaim = workflowStateService.claim(workflowId);
         if (optionalClaim.isEmpty()) {
             return;
         }
         KycExecutionClaim claim = optionalClaim.get();
         try {
-            KycMaskedInput input = dataMaskingService.mask(customerDataLoader.load(claim.personId()));
+            KycMaskedInput input = dataMaskingService.mask(customerDataLoader.load(claim.personId()), supplement);
             KycGenerationResult result = analysisGenerator.generate(input);
             workflowStateService.complete(claim, input, result);
         } catch (KycInputValidationException exception) {

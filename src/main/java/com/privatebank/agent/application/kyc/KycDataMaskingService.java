@@ -47,6 +47,10 @@ public class KycDataMaskingService {
     }
 
     public KycMaskedInput mask(KycCustomerData data) {
+        return mask(data, KycRuntimeSupplement.empty());
+    }
+
+    public KycMaskedInput mask(KycCustomerData data, KycRuntimeSupplement supplement) {
         MaskingContext context = new MaskingContext();
         collectProhibitedTerms(data, context.prohibitedTerms);
 
@@ -56,6 +60,9 @@ public class KycDataMaskingService {
         payload.put("enterprise", enterprise(data, context));
         payload.put("family", family(data, context));
         payload.put("social", social(data, context));
+        if (supplement != null && !supplement.signals().isEmpty()) {
+            payload.put("managerSupplement", Map.of("signals", supplement.signals()));
+        }
         inputSafetyValidator.validate(payload, context.prohibitedTerms);
 
         return new KycMaskedInput(payload, context.evidenceReferences, context.prohibitedTerms, sha256(payload));
