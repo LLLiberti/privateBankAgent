@@ -1,6 +1,7 @@
 package com.privatebank.business.controller.admin;
 
 import com.privatebank.business.dto.admin.AdminWorkflowResponse;
+import com.privatebank.business.dto.product.ProductCatalogResponse;
 import com.privatebank.business.dto.admin.ConfigurationCandidateRequest;
 import com.privatebank.business.dto.admin.ConfigurationPublishRequest;
 import com.privatebank.business.dto.admin.CustomerManagerResponse;
@@ -13,6 +14,7 @@ import com.privatebank.business.service.admin.CustomerScopeAdminService;
 import com.privatebank.business.dto.common.PageResponse;
 import com.privatebank.business.dto.document.DocumentResponse;
 import com.privatebank.business.service.document.DocumentService;
+import com.privatebank.business.service.product.ProductService;
 import com.privatebank.business.security.CurrentUserPrincipal;
 import com.privatebank.business.entity.workflow.WorkflowStatus;
 import jakarta.validation.Valid;
@@ -49,6 +51,7 @@ public class AdminController {
     private final ConfigurationRegistry configurationRegistry;
     private final CustomerScopeAdminService customerScopeAdminService;
     private final DocumentService documentService;
+    private final ProductService productService;
 
     @GetMapping("/overview")
     public Map<String, Object> overview() {
@@ -93,6 +96,19 @@ public class AdminController {
             @RequestParam(defaultValue = "1") @Min(1) int pageNo,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int pageSize) {
         return adminService.workflows(status, pageNo, pageSize);
+    }
+
+    @GetMapping("/products")
+    public PageResponse<ProductCatalogResponse> products(
+            @RequestParam(required = false) @Size(max = 100) String keyword,
+            @RequestParam(required = false) @Size(max = 100) String productCategory,
+            @RequestParam(required = false) @Size(max = 20) String riskLevel,
+            @RequestParam(required = false) @Size(max = 30) String productStatus,
+            @RequestParam(required = false) @Size(max = 10) String currency,
+            @RequestParam(defaultValue = "1") @Min(1) int pageNo,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int pageSize) {
+        return productService.listForAdministration(
+                keyword, productCategory, riskLevel, productStatus, currency, pageNo, pageSize);
     }
 
     @GetMapping("/customer-managers")
