@@ -101,6 +101,9 @@ class KycDatabaseWorkflowLiveTest {
         registry.add("spring.datasource.url", () -> DATASOURCE_URL);
         registry.add("spring.datasource.username", () -> DATASOURCE_USERNAME);
         registry.add("spring.datasource.password", () -> DATASOURCE_PASSWORD);
+        registry.add("spring.datasource.hikari.max-lifetime", () -> 240000L);
+        registry.add("spring.datasource.hikari.keepalive-time", () -> 60000L);
+        registry.add("spring.datasource.hikari.validation-timeout", () -> 5000L);
         registry.add("spring.flyway.enabled", () -> false);
         registry.add("spring.ai.deepseek.base-url", () -> BASE_URL);
         registry.add("spring.ai.deepseek.api-key", () -> API_KEY);
@@ -444,7 +447,7 @@ class KycDatabaseWorkflowLiveTest {
     }
 
     @Configuration(proxyBeanMethods = false)
-    @Import(MybatisPlusConfig.class)
+    @Import({MybatisPlusConfig.class, KycAsyncConfiguration.class})
     @EnableConfigurationProperties(StorageProperties.class)
     @ImportAutoConfiguration({
             DataSourceAutoConfiguration.class,
@@ -506,11 +509,6 @@ class KycDatabaseWorkflowLiveTest {
                 KycDataMaskingService maskingService,
                 KycAnalysisGenerator analysisGenerator) {
             return new KycWorkflowExecutionService(stateService, dataLoader, maskingService, analysisGenerator);
-        }
-
-        @Bean
-        KycAsyncConfiguration kycAsyncConfiguration() {
-            return new KycAsyncConfiguration();
         }
 
         @Bean
