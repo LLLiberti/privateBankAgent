@@ -67,12 +67,26 @@ public class KycAnalysisGenerator {
                 log.warn("KYC generation failed contract validation on attempt {}: {}",
                         attempt, exception.getMessage());
             } catch (KycModelInvocationException exception) {
-                throw exception;
+                log.warn("KYC model invocation returned no usable result on attempt {}/{}: failureType={}",
+                        attempt, attempts, modelFailureType(exception));
+                if (!isEmptyResponse(exception) || attempt == attempts) {
+                    throw exception;
+                }
             } catch (RuntimeException exception) {
                 throw new KycModelInvocationException("KYC 模型调用失败", exception);
             }
         }
         throw new KycGenerationException("KYC 模型连续返回不符合合约的结果", lastValidationError);
+    }
+
+    private String modelFailureType(KycModelInvocationException exception) {
+        return isEmptyResponse(exception)
+                ? "EMPTY_RESPONSE"
+                : "INVOCATION_FAILED";
+    }
+
+    private boolean isEmptyResponse(KycModelInvocationException exception) {
+        return "KYC 模型未返回可用内容".equals(exception.getMessage());
     }
 
     private String serializePayload(KycMaskedInput input) {

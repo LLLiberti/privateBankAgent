@@ -15,7 +15,9 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -62,6 +64,32 @@ class KycWorkflowExecutionServiceTest {
         service.execute("WF-2");
 
         verify(stateService).fail(eq(claim), eq("KYC_OUTPUT_CONTRACT_INVALID"), eq("KYC 分析结果未通过格式或脱敏校验"));
+    }
+
+    @Test
+    void doesNotOverwriteSuccessfulExecutionWhenCompletionSideEffectFails() {
+        KycWorkflowStateService stateService = mock(KycWorkflowStateService.class);
+        KycCustomerDataLoader loader = mock(KycCustomerDataLoader.class);
+        KycDataMaskingService maskingService = mock(KycDataMaskingService.class);
+        KycAnalysisGenerator generator = mock(KycAnalysisGenerator.class);
+        KycWorkflowExecutionService service = new KycWorkflowExecutionService(
+                stateService, loader, maskingService, generator);
+        KycExecutionClaim claim = new KycExecutionClaim("WF-3", 102L, "EXE-3");
+        KycCustomerData data = emptyData();
+        KycMaskedInput input = new KycMaskedInput(Map.of("person", Map.of()), Map.of(), Set.of(), "d".repeat(64));
+        KycGenerationResult result = new KycGenerationResult(validResult(), 1, "fake-deepseek");
+        when(stateService.claim("WF-3")).thenReturn(Optional.of(claim));
+        when(loader.load(102L)).thenReturn(data);
+        when(maskingService.mask(eq(data), eq(KycRuntimeSupplement.empty()))).thenReturn(input);
+        when(generator.generate(input)).thenReturn(result);
+        doThrow(new IllegalStateException("success event failed"))
+                .when(stateService).complete(eq(claim), eq(input), eq(result));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.execute("WF-3"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("success event failed");
+
+        verify(stateService, never()).fail(eq(claim), eq("KYC_MODEL_CALL_FAILED"), org.mockito.ArgumentMatchers.anyString());
     }
 
     private KycCustomerData emptyData() {

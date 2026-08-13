@@ -389,10 +389,13 @@ class KycDatabaseWorkflowLiveTest {
                         .isIn(WorkflowStatus.WAITING_INPUT, WorkflowStatus.FAILED));
         WorkflowState workflow = workflowStateMapper.selectById(workflowId);
         AgentState state = kycState(workflowId);
+        AgentArtifact latestArtifact = latestKycArtifact(workflowId);
         assertThat(workflow.getWorkflowStatus())
-                .withFailMessage("KYC workflow failed: workflowErrorCode=%s, workflowErrorMessage=%s, agentStatus=%s, agentErrorCode=%s, agentErrorMessage=%s",
+                .withFailMessage("KYC workflow failed: workflowErrorCode=%s, workflowErrorMessage=%s, agentStatus=%s, agentExecutionId=%s, agentErrorCode=%s, agentErrorMessage=%s, latestArtifactVersion=%s, latestArtifactExecutionId=%s",
                         workflow.getErrorCode(), workflow.getErrorMessage(), state == null ? null : state.getAgentStatus(),
-                        state == null ? null : state.getErrorCode(), state == null ? null : state.getErrorMessage())
+                        state == null ? null : state.getExecutionId(), state == null ? null : state.getErrorCode(),
+                        state == null ? null : state.getErrorMessage(), latestArtifact == null ? null : latestArtifact.getVersion(),
+                        latestArtifact == null ? null : latestArtifact.getExecutionId())
                 .isEqualTo(WorkflowStatus.WAITING_INPUT);
         return workflow;
     }

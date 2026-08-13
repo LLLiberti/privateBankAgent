@@ -4,6 +4,7 @@ import com.privatebank.agent.domain.kyc.KycGenerationException;
 import com.privatebank.agent.domain.kyc.KycGenerationResult;
 import com.privatebank.agent.domain.kyc.KycInputValidationException;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
+import com.privatebank.agent.domain.kyc.KycModelInvocationException;
 import com.privatebank.agent.infrastructure.kyc.KycCustomerDataLoader;
 import com.privatebank.agent.infrastructure.kyc.KycWorkflowStateService;
 import lombok.RequiredArgsConstructor;
@@ -36,19 +37,35 @@ public class KycWorkflowExecutionService {
             return;
         }
         KycExecutionClaim claim = optionalClaim.get();
+        KycMaskedInput input;
+        KycGenerationResult result;
         try {
-            KycMaskedInput input = dataMaskingService.mask(customerDataLoader.load(claim.personId()), supplement);
-            KycGenerationResult result = analysisGenerator.generate(input);
-            workflowStateService.complete(claim, input, result);
+            input = dataMaskingService.mask(customerDataLoader.load(claim.personId()), supplement);
+            result = analysisGenerator.generate(input);
         } catch (KycInputValidationException exception) {
             workflowStateService.fail(claim, INPUT_CONTRACT_ERROR, "KYC 脱敏输入未通过出站安全校验");
+            return;
         } catch (KycGenerationException exception) {
             workflowStateService.fail(claim, OUTPUT_CONTRACT_ERROR, "KYC 分析结果未通过格式或脱敏校验");
-        } catch (RuntimeException exception) {
-            log.warn("KYC model invocation failed for workflow {}: rootCauseType={}", workflowId,
+            return;
+        } catch (KycModelInvocationException exception) {
+            log.warn("KYC model invocation failed for workflow {} executionId={}: failureType={} rootCauseType={}",
+                    workflowId, claim.executionId(), modelFailureType(exception),
                     rootCause(exception).getClass().getSimpleName());
             workflowStateService.fail(claim, MODEL_CALL_ERROR, "KYC 模型调用失败，请稍后重试");
+            return;
+        } catch (RuntimeException exception) {
+            log.warn("KYC preparation failed for workflow {} executionId={}: failureType=PREPARATION_FAILED rootCauseType={}",
+                    workflowId, claim.executionId(), rootCause(exception).getClass().getSimpleName(), exception);
+            throw exception;
         }
+        workflowStateService.complete(claim, input, result);
+    }
+
+    private String modelFailureType(KycModelInvocationException exception) {
+        return "KYC 模型未返回可用内容".equals(exception.getMessage())
+                ? "EMPTY_RESPONSE"
+                : "INVOCATION_FAILED";
     }
 
     private Throwable rootCause(Throwable exception) {

@@ -2,6 +2,7 @@ package com.privatebank.agent.application.kyc;
 
 import com.privatebank.agent.domain.kyc.KycGenerationResult;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
+import com.privatebank.agent.domain.kyc.KycModelInvocationException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -98,6 +99,26 @@ class KycAnalysisGeneratorTest {
         assertThat(calls).hasValue(1);
         assertThat(result.attempts()).isEqualTo(1);
         assertThat(result.analysisJson()).contains("首次生成的最终结论");
+    }
+
+    @Test
+    void retriesWhenModelReturnsNoUsableContent() {
+        AtomicInteger calls = new AtomicInteger();
+        KycModelClient client = new KycModelClient() {
+            @Override
+            public String generate(String systemPrompt, String userPrompt) {
+                if (calls.incrementAndGet() == 1) {
+                    throw new KycModelInvocationException("KYC 模型未返回可用内容");
+                }
+                return validResult("空响应重试后的结论");
+            }
+        };
+
+        KycGenerationResult result = generator(client).generate(input());
+
+        assertThat(calls).hasValue(2);
+        assertThat(result.attempts()).isEqualTo(2);
+        assertThat(result.analysisJson()).contains("空响应重试后的结论");
     }
 
     private KycAnalysisGenerator generator(KycModelClient client) {
