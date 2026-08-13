@@ -1,0 +1,10 @@
+.venv/
+.env
+!.env.example
+!data/*.pdf
+!data/raw/*.pdf
+output/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+temp/
