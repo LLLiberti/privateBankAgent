@@ -85,6 +85,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @ContextConfiguration(classes = KycDatabaseWorkflowLiveTest.LiveDatabaseWorkflowConfiguration.class)
 class KycDatabaseWorkflowLiveTest {
 
+    private static final String NOT_CREATED_WORKFLOW_ID = "NOT_CREATED";
     private static final long PERSON_ID = 1L;
     private static final long IMPORT_BATCH_ID = 1L;
     private static final String CUSTOMER_MANAGER_ID = "USER-DEMO-CUSTOMER-MANAGER";
@@ -144,146 +145,184 @@ class KycDatabaseWorkflowLiveTest {
 
     @Test
     void executesManagerSupplementRegenerationAndApprovalFlowAgainstLiveDatabaseAndModel() throws Exception {
-        assertThat(customerDataMapper.findSummary(PERSON_ID))
-                .as("personId=1 must exist in the configured database")
-                .isNotNull();
+        long testStartedNanos = System.nanoTime();
+        String workflowId = NOT_CREATED_WORKFLOW_ID;
+        boolean completed = false;
+        logTiming("START", "TEST_TOTAL", workflowId, testStartedNanos, testStartedNanos, "RUNNING");
+        try {
+            timed(workflowId, "VERIFY_LIVE_CUSTOMER", testStartedNanos, () -> {
+                assertThat(customerDataMapper.findSummary(PERSON_ID))
+                        .as("personId=1 must exist in the configured database")
+                        .isNotNull();
+                return null;
+            });
 
-        KycCustomerData rawCustomerData = customerDataLoader.load(PERSON_ID);
-        KycMaskedInput expectedMaskedInput = dataMaskingService.mask(rawCustomerData);
-        System.out.printf("[KYC agent runtime] phase=MASKING_COMPLETED evidenceRefCount=%d prohibitedTermCount=%d decision=invoke-model-with-masked-input-only%n"
-                        + "[KYC masked input] sha256=%s payload=%s%n",
-                expectedMaskedInput.evidenceReferences().size(), expectedMaskedInput.prohibitedTerms().size(),
-                expectedMaskedInput.sha256(), objectMapper.writeValueAsString(expectedMaskedInput.payload()));
-        WorkflowCreatedResponse created = workflowService.create(
-                new CurrentUserPrincipal(CUSTOMER_MANAGER_ID, "live-kyc-test", RoleName.CUSTOMER_MANAGER),
-                "live-kyc-" + UUID.randomUUID(),
-                new CreateWorkflowRequest(
-                        PERSON_ID,
-                        IMPORT_BATCH_ID,
-                        LocalDate.now(),
-                        "KYC-LIVE-TEST",
-                        "Execute the standard KYC analysis for the selected customer."));
+            KycCustomerData rawCustomerData = timed(workflowId, "LOAD_AND_MASK_LOCAL_DATA", testStartedNanos, () -> {
+                KycCustomerData customerData = customerDataLoader.load(PERSON_ID);
+                KycMaskedInput maskedInput = dataMaskingService.mask(customerData);
+                System.out.printf("[KYC agent runtime] phase=MASKING_COMPLETED evidenceRefCount=%d prohibitedTermCount=%d decision=invoke-model-with-masked-input-only%n"
+                                + "[KYC masked input] sha256=%s payload=%s%n",
+                        maskedInput.evidenceReferences().size(), maskedInput.prohibitedTerms().size(),
+                        maskedInput.sha256(), objectMapper.writeValueAsString(maskedInput.payload()));
+                return customerData;
+            });
+            KycMaskedInput expectedMaskedInput = dataMaskingService.mask(rawCustomerData);
+            WorkflowCreatedResponse created = timed(workflowId, "CREATE_WORKFLOW", testStartedNanos, () -> workflowService.create(
+                    new CurrentUserPrincipal(CUSTOMER_MANAGER_ID, "live-kyc-test", RoleName.CUSTOMER_MANAGER),
+                    "live-kyc-" + UUID.randomUUID(),
+                    new CreateWorkflowRequest(
+                            PERSON_ID,
+                            IMPORT_BATCH_ID,
+                            LocalDate.now(),
+                            "KYC-LIVE-TEST",
+                            "Execute the standard KYC analysis for the selected customer.")));
+            workflowId = created.workflowId();
         System.out.printf("[KYC agent runtime] phase=WORKFLOW_CREATED workflowId=%s status=%s decision=wait-for-async-kyc%n",
                 created.workflowId(), created.workflowStatus());
 
-        WorkflowState workflow = awaitKycOutcome(created.workflowId());
+        WorkflowState workflow = timed(workflowId, "WAIT_INITIAL_KYC_ANALYSIS", testStartedNanos,
+                () -> awaitKycOutcome(created.workflowId()));
         AgentState kycState = kycState(created.workflowId());
         AgentArtifact artifact = latestKycArtifact(created.workflowId());
 
-        assertThat(workflow.getPersonId()).isEqualTo(PERSON_ID);
-        assertThat(workflow.getWorkflowStatus())
-                .withFailMessage("KYC workflow failed: workflowErrorCode=%s, workflowErrorMessage=%s, agentStatus=%s, agentErrorCode=%s, agentErrorMessage=%s",
-                        workflow.getErrorCode(), workflow.getErrorMessage(), kycState == null ? null : kycState.getAgentStatus(),
-                        kycState == null ? null : kycState.getErrorCode(), kycState == null ? null : kycState.getErrorMessage())
-                .isEqualTo(WorkflowStatus.WAITING_INPUT);
-        assertThat(kycState).isNotNull();
-        assertThat(kycState.getAgentStatus()).isEqualTo(AgentStatus.SUCCESS);
-        assertThat(kycState.getExecutionId()).isNotBlank();
-        assertThat(artifact).isNotNull();
-        assertThat(artifact.getAgentStateId()).isEqualTo(kycState.getAgentStateId());
-        assertThat(artifact.getExecutionId()).isEqualTo(kycState.getExecutionId());
-        assertThat(artifact.getVersion()).isEqualTo(1);
+        JsonNode analysis = timed(workflowId, "VALIDATE_INITIAL_KYC_ARTIFACT", testStartedNanos, () -> {
+            assertThat(workflow.getPersonId()).isEqualTo(PERSON_ID);
+            assertThat(workflow.getWorkflowStatus())
+                    .withFailMessage("KYC workflow failed: workflowErrorCode=%s, workflowErrorMessage=%s, agentStatus=%s, agentErrorCode=%s, agentErrorMessage=%s",
+                            workflow.getErrorCode(), workflow.getErrorMessage(), kycState == null ? null : kycState.getAgentStatus(),
+                            kycState == null ? null : kycState.getErrorCode(), kycState == null ? null : kycState.getErrorMessage())
+                    .isEqualTo(WorkflowStatus.WAITING_INPUT);
+            assertThat(kycState).isNotNull();
+            assertThat(kycState.getAgentStatus()).isEqualTo(AgentStatus.SUCCESS);
+            assertThat(kycState.getExecutionId()).isNotBlank();
+            assertThat(artifact).isNotNull();
+            assertThat(artifact.getAgentStateId()).isEqualTo(kycState.getAgentStateId());
+            assertThat(artifact.getExecutionId()).isEqualTo(kycState.getExecutionId());
+            assertThat(artifact.getVersion()).isEqualTo(1);
 
-        JsonNode savedResult = objectMapper.readTree(artifact.getResult());
-        JsonNode analysis = savedResult.path("analysis");
-        assertThat(savedResult.path("maskingApplied").asBoolean()).isTrue();
-        assertThat(savedResult.path("maskedInputSha256").asText()).isEqualTo(expectedMaskedInput.sha256());
-        assertThat(savedResult.path("model").asText()).isEqualTo(MODEL);
-        assertThat(analysis.fieldNames()).toIterable().containsExactlyInAnyOrder(
-                "riskLevel", "summary", "findings", "riskAlerts", "recommendedActions", "dataGaps");
-        for (String prohibitedValue : expectedMaskedInput.prohibitedTerms()) {
-            assertThat(artifact.getResult()).doesNotContain(prohibitedValue);
-        }
+            JsonNode savedResult = objectMapper.readTree(artifact.getResult());
+            JsonNode initialAnalysis = savedResult.path("analysis");
+            assertThat(savedResult.path("maskingApplied").asBoolean()).isTrue();
+            assertThat(savedResult.path("maskedInputSha256").asText()).isEqualTo(expectedMaskedInput.sha256());
+            assertThat(savedResult.path("model").asText()).isEqualTo(MODEL);
+            assertThat(initialAnalysis.fieldNames()).toIterable().containsExactlyInAnyOrder(
+                    "riskLevel", "summary", "findings", "riskAlerts", "recommendedActions", "dataGaps");
+            for (String prohibitedValue : expectedMaskedInput.prohibitedTerms()) {
+                assertThat(artifact.getResult()).doesNotContain(prohibitedValue);
+            }
+            return initialAnalysis;
+        });
         System.out.printf("[KYC agent runtime] phase=ARTIFACT_VALIDATED workflowId=%s agentStatus=%s decision=kyc-result-is-ready-for-manager-confirmation%n",
                 created.workflowId(), kycState.getAgentStatus());
 
-        assertThatThrownBy(() -> workflowService.provideInput(
-                managerPrincipal(),
-                created.workflowId(),
-                "live-kyc-empty-supplement-" + UUID.randomUUID(),
-                new WorkflowInputRequest(WorkflowInputRequest.Action.SUPPLEMENT, artifact.getArtifactId(), " ", List.of())))
-                .isInstanceOf(BusinessException.class)
-                .satisfies(exception -> assertThat(((BusinessException) exception).getCode())
-                        .isEqualTo(ErrorCode.INVALID_ARGUMENT));
-        assertThat(workflowStateMapper.selectById(created.workflowId()).getWorkflowStatus())
-                .isEqualTo(WorkflowStatus.WAITING_INPUT);
-        assertThat(kycArtifacts(created.workflowId())).hasSize(1);
+        timed(workflowId, "VALIDATE_EMPTY_SUPPLEMENT_REJECTED", testStartedNanos, () -> {
+            assertThatThrownBy(() -> workflowService.provideInput(
+                    managerPrincipal(),
+                    created.workflowId(),
+                    "live-kyc-empty-supplement-" + UUID.randomUUID(),
+                    new WorkflowInputRequest(WorkflowInputRequest.Action.SUPPLEMENT, artifact.getArtifactId(), " ", List.of())))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(exception -> assertThat(((BusinessException) exception).getCode())
+                            .isEqualTo(ErrorCode.INVALID_ARGUMENT));
+            assertThat(workflowStateMapper.selectById(created.workflowId()).getWorkflowStatus())
+                    .isEqualTo(WorkflowStatus.WAITING_INPUT);
+            assertThat(kycArtifacts(created.workflowId())).hasSize(1);
+            return null;
+        });
 
         String rawManagerSupplement = "LIVE_RUNTIME_SUPPLEMENT_DO_NOT_PERSIST_20260812";
         List<String> confirmedItems = List.of("客户近期存在流动性安排需求");
-        KycRuntimeSupplement supplement = runtimeSupplementProjector.project(rawManagerSupplement, confirmedItems);
-        KycMaskedInput regeneratedMaskedInput = dataMaskingService.mask(rawCustomerData, supplement);
-        assertThat(supplement.signals()).contains("LIQUIDITY_NEED").doesNotContain(rawManagerSupplement);
-        assertThat(objectMapper.writeValueAsString(regeneratedMaskedInput.payload()))
-                .contains("managerSupplement", "LIQUIDITY_NEED")
-                .doesNotContain(rawManagerSupplement);
+        KycMaskedInput regeneratedMaskedInput = timed(workflowId, "PROJECT_RUNTIME_SUPPLEMENT", testStartedNanos, () -> {
+            KycRuntimeSupplement supplement = runtimeSupplementProjector.project(rawManagerSupplement, confirmedItems);
+            KycMaskedInput maskedInput = dataMaskingService.mask(rawCustomerData, supplement);
+            assertThat(supplement.signals()).contains("LIQUIDITY_NEED").doesNotContain(rawManagerSupplement);
+            assertThat(objectMapper.writeValueAsString(maskedInput.payload()))
+                    .contains("managerSupplement", "LIQUIDITY_NEED")
+                    .doesNotContain(rawManagerSupplement);
+            return maskedInput;
+        });
 
-        WorkflowDetailResponse supplementAccepted = workflowService.provideInput(
-                managerPrincipal(),
-                created.workflowId(),
-                "live-kyc-supplement-" + UUID.randomUUID(),
-                new WorkflowInputRequest(
-                        WorkflowInputRequest.Action.SUPPLEMENT,
-                        artifact.getArtifactId(),
-                        rawManagerSupplement,
-                        confirmedItems));
-        assertThat(supplementAccepted.workflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
-        assertThat(agentState(supplementAccepted, AgentType.CUSTOMER_INSIGHT).agentStatus()).isEqualTo(AgentStatus.READY);
+        WorkflowDetailResponse supplementAccepted = timed(workflowId, "SUBMIT_MANAGER_SUPPLEMENT", testStartedNanos,
+                () -> workflowService.provideInput(
+                        managerPrincipal(),
+                        created.workflowId(),
+                        "live-kyc-supplement-" + UUID.randomUUID(),
+                        new WorkflowInputRequest(
+                                WorkflowInputRequest.Action.SUPPLEMENT,
+                                artifact.getArtifactId(),
+                                rawManagerSupplement,
+                                confirmedItems)));
+        timed(workflowId, "VERIFY_SUPPLEMENT_ACCEPTED", testStartedNanos, () -> {
+            assertThat(supplementAccepted.workflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
+            assertThat(agentState(supplementAccepted, AgentType.CUSTOMER_INSIGHT).agentStatus()).isEqualTo(AgentStatus.READY);
+            return null;
+        });
         System.out.printf("[KYC agent runtime] phase=MANAGER_SUPPLEMENT_ACCEPTED workflowId=%s decision=regenerate-kyc-with-runtime-only-signals%n",
                 created.workflowId());
 
-        WorkflowState regeneratedWorkflow = awaitKycOutcome(created.workflowId());
+        WorkflowState regeneratedWorkflow = timed(workflowId, "WAIT_REGENERATED_KYC_ANALYSIS", testStartedNanos,
+                () -> awaitKycOutcome(created.workflowId()));
         AgentState regeneratedKycState = kycState(created.workflowId());
         AgentArtifact regeneratedArtifact = latestKycArtifact(created.workflowId());
-        assertThat(regeneratedWorkflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.WAITING_INPUT);
-        assertThat(regeneratedWorkflow.getAnalysisRequirements())
-                .isEqualTo("Execute the standard KYC analysis for the selected customer.")
-                .doesNotContain(rawManagerSupplement);
-        assertThat(regeneratedKycState.getAgentStatus()).isEqualTo(AgentStatus.SUCCESS);
-        assertThat(regeneratedArtifact.getVersion()).isEqualTo(2);
-        assertThat(regeneratedArtifact.getArtifactId()).isNotEqualTo(artifact.getArtifactId());
-        assertThat(regeneratedArtifact.getExecutionId()).isEqualTo(regeneratedKycState.getExecutionId())
-                .isNotEqualTo(kycState.getExecutionId());
-        assertThat(kycArtifacts(created.workflowId())).extracting(AgentArtifact::getVersion)
-                .containsExactly(1, 2);
-        JsonNode regeneratedResult = objectMapper.readTree(regeneratedArtifact.getResult());
-        assertThat(regeneratedResult.path("maskedInputSha256").asText()).isEqualTo(regeneratedMaskedInput.sha256());
-        assertKycArtifactIsSafeAndContractValid(regeneratedArtifact, regeneratedMaskedInput, rawManagerSupplement);
+        timed(workflowId, "VALIDATE_REGENERATED_KYC_ARTIFACT", testStartedNanos, () -> {
+            assertThat(regeneratedWorkflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.WAITING_INPUT);
+            assertThat(regeneratedWorkflow.getAnalysisRequirements())
+                    .isEqualTo("Execute the standard KYC analysis for the selected customer.")
+                    .doesNotContain(rawManagerSupplement);
+            assertThat(regeneratedKycState.getAgentStatus()).isEqualTo(AgentStatus.SUCCESS);
+            assertThat(regeneratedArtifact.getVersion()).isEqualTo(2);
+            assertThat(regeneratedArtifact.getArtifactId()).isNotEqualTo(artifact.getArtifactId());
+            assertThat(regeneratedArtifact.getExecutionId()).isEqualTo(regeneratedKycState.getExecutionId())
+                    .isNotEqualTo(kycState.getExecutionId());
+            assertThat(kycArtifacts(created.workflowId())).extracting(AgentArtifact::getVersion)
+                    .containsExactly(1, 2);
+            JsonNode regeneratedResult = objectMapper.readTree(regeneratedArtifact.getResult());
+            assertThat(regeneratedResult.path("maskedInputSha256").asText()).isEqualTo(regeneratedMaskedInput.sha256());
+            assertKycArtifactIsSafeAndContractValid(regeneratedArtifact, regeneratedMaskedInput, rawManagerSupplement);
+            return null;
+        });
         System.out.printf("[KYC agent runtime] phase=KYC_REGENERATED workflowId=%s artifactId=%s version=%d decision=manager-can-approve-latest-kyc%n",
                 created.workflowId(), regeneratedArtifact.getArtifactId(), regeneratedArtifact.getVersion());
 
-        assertThatThrownBy(() -> workflowService.provideInput(
-                managerPrincipal(),
-                created.workflowId(),
-                "live-kyc-stale-approval-" + UUID.randomUUID(),
-                new WorkflowInputRequest(WorkflowInputRequest.Action.CONTINUE, artifact.getArtifactId(), null, List.of())))
-                .isInstanceOf(BusinessException.class)
-                .satisfies(exception -> assertThat(((BusinessException) exception).getCode())
-                        .isEqualTo(ErrorCode.STALE_ARTIFACT));
-        assertThat(workflowStateMapper.selectById(created.workflowId()).getWorkflowStatus())
-                .isEqualTo(WorkflowStatus.WAITING_INPUT);
-        assertThat(agentState(created.workflowId(), AgentType.MARKET_INSIGHT).getAgentStatus()).isEqualTo(AgentStatus.PENDING);
-        assertThat(agentState(created.workflowId(), AgentType.PRODUCT_EXPERT).getAgentStatus()).isEqualTo(AgentStatus.PENDING);
+        timed(workflowId, "VALIDATE_STALE_ARTIFACT_REJECTED", testStartedNanos, () -> {
+            assertThatThrownBy(() -> workflowService.provideInput(
+                    managerPrincipal(),
+                    created.workflowId(),
+                    "live-kyc-stale-approval-" + UUID.randomUUID(),
+                    new WorkflowInputRequest(WorkflowInputRequest.Action.CONTINUE, artifact.getArtifactId(), null, List.of())))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(exception -> assertThat(((BusinessException) exception).getCode())
+                            .isEqualTo(ErrorCode.STALE_ARTIFACT));
+            assertThat(workflowStateMapper.selectById(created.workflowId()).getWorkflowStatus())
+                    .isEqualTo(WorkflowStatus.WAITING_INPUT);
+            assertThat(agentState(created.workflowId(), AgentType.MARKET_INSIGHT).getAgentStatus()).isEqualTo(AgentStatus.PENDING);
+            assertThat(agentState(created.workflowId(), AgentType.PRODUCT_EXPERT).getAgentStatus()).isEqualTo(AgentStatus.PENDING);
+            return null;
+        });
 
-        WorkflowDetailResponse approvalAccepted = workflowService.provideInput(
-                managerPrincipal(),
-                created.workflowId(),
-                "live-kyc-approval-" + UUID.randomUUID(),
-                new WorkflowInputRequest(
-                        WorkflowInputRequest.Action.CONTINUE,
-                        regeneratedArtifact.getArtifactId(),
-                        null,
-                        List.of()));
-        assertThat(approvalAccepted.workflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
-        assertThat(agentState(approvalAccepted, AgentType.MARKET_INSIGHT).agentStatus()).isEqualTo(AgentStatus.READY);
-        assertThat(agentState(approvalAccepted, AgentType.PRODUCT_EXPERT).agentStatus()).isEqualTo(AgentStatus.READY);
+        WorkflowDetailResponse approvalAccepted = timed(workflowId, "APPROVE_LATEST_KYC_AND_RELEASE_DOWNSTREAM", testStartedNanos,
+                () -> workflowService.provideInput(
+                        managerPrincipal(),
+                        created.workflowId(),
+                        "live-kyc-approval-" + UUID.randomUUID(),
+                        new WorkflowInputRequest(
+                                WorkflowInputRequest.Action.CONTINUE,
+                                regeneratedArtifact.getArtifactId(),
+                                null,
+                                List.of())));
+        WorkflowState approvedWorkflow = timed(workflowId, "VERIFY_DOWNSTREAM_RELEASE", testStartedNanos, () -> {
+            assertThat(approvalAccepted.workflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
+            assertThat(agentState(approvalAccepted, AgentType.MARKET_INSIGHT).agentStatus()).isEqualTo(AgentStatus.READY);
+            assertThat(agentState(approvalAccepted, AgentType.PRODUCT_EXPERT).agentStatus()).isEqualTo(AgentStatus.READY);
 
-        WorkflowState approvedWorkflow = workflowStateMapper.selectById(created.workflowId());
-        assertThat(approvedWorkflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
-        assertThat(agentState(created.workflowId(), AgentType.MARKET_INSIGHT).getAgentStatus()).isEqualTo(AgentStatus.READY);
-        assertThat(agentState(created.workflowId(), AgentType.PRODUCT_EXPERT).getAgentStatus()).isEqualTo(AgentStatus.READY);
-        assertThat(kycArtifacts(created.workflowId())).extracting(AgentArtifact::getVersion)
-                .containsExactly(1, 2);
+            WorkflowState finalWorkflow = workflowStateMapper.selectById(created.workflowId());
+            assertThat(finalWorkflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
+            assertThat(agentState(created.workflowId(), AgentType.MARKET_INSIGHT).getAgentStatus()).isEqualTo(AgentStatus.READY);
+            assertThat(agentState(created.workflowId(), AgentType.PRODUCT_EXPERT).getAgentStatus()).isEqualTo(AgentStatus.READY);
+            assertThat(kycArtifacts(created.workflowId())).extracting(AgentArtifact::getVersion)
+                    .containsExactly(1, 2);
+            return finalWorkflow;
+        });
         System.out.printf("[KYC agent runtime] phase=MANAGER_APPROVED workflowId=%s decision=downstream-agents-ready%n",
                 created.workflowId());
 
@@ -292,6 +331,47 @@ class KycDatabaseWorkflowLiveTest {
                         +"[KYC 结果] kycResult artifact=%s",
                 created.workflowId(), PERSON_ID, approvedWorkflow.getWorkflowStatus(), regeneratedKycState.getAgentStatus(), regeneratedArtifact.getArtifactId(),
                 objectMapper.writeValueAsString(expectedMaskedInput.payload()), analysis, artifact);
+            completed = true;
+        } finally {
+            logTiming("END", "TEST_TOTAL", workflowId, testStartedNanos, testStartedNanos,
+                    completed ? "SUCCESS" : "FAILED");
+        }
+    }
+
+    private <T> T timed(String workflowId, String step, long testStartedNanos, TimedOperation<T> operation) throws Exception {
+        long stepStartedNanos = System.nanoTime();
+        logTiming("START", step, workflowId, stepStartedNanos, testStartedNanos, "RUNNING");
+        try {
+            T result = operation.execute();
+            logTiming("END", step, workflowId, stepStartedNanos, testStartedNanos, "SUCCESS");
+            return result;
+        } catch (RuntimeException | Error exception) {
+            logTiming("END", step, workflowId, stepStartedNanos, testStartedNanos,
+                    "FAILED:" + exception.getClass().getSimpleName());
+            throw exception;
+        } catch (Exception exception) {
+            logTiming("END", step, workflowId, stepStartedNanos, testStartedNanos,
+                    "FAILED:" + exception.getClass().getSimpleName());
+            throw exception;
+        }
+    }
+
+    private void logTiming(String event, String step, String workflowId, long stepStartedNanos,
+                           long testStartedNanos, String outcome) {
+        long now = System.nanoTime();
+        System.out.printf("[KYC live test timing] event=%s step=%s workflowId=%s stepElapsedMs=%d totalElapsedMs=%d outcome=%s%n",
+                event, step, workflowId, nanosToMillis(now - stepStartedNanos),
+                nanosToMillis(now - testStartedNanos), outcome);
+    }
+
+    private long nanosToMillis(long nanos) {
+        return nanos / 1_000_000;
+    }
+
+    @FunctionalInterface
+    private interface TimedOperation<T> {
+
+        T execute() throws Exception;
     }
 
     private CurrentUserPrincipal managerPrincipal() {
