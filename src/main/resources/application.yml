@@ -2,9 +2,9 @@ spring:
   application:
     name: private-bank-backend
   datasource:
-    url: ${PRIVATE_BANK_DB_URL}
-    username: ${PRIVATE_BANK_DB_USERNAME}
-    password: ${PRIVATE_BANK_DB_PASSWORD}
+    url: ${PRIVATE_BANK_DB_URL:jdbc:mysql://47.116.18.232:3306/private_bank_agent?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}
+    username: root
+    password: ICBCSDCIntern@0710
     hikari:
       maximum-pool-size: 10
       minimum-idle: 1
@@ -18,15 +18,15 @@ spring:
     baseline-version: 0
     locations: classpath:db/migration
   elasticsearch:
-    uris: ${PRIVATE_BANK_ES_URIS:}
-    username: ${PRIVATE_BANK_ES_USERNAME:}
-    password: ${PRIVATE_BANK_ES_PASSWORD:}
+    uris: ${PRIVATE_BANK_ES_URIS:https://124.220.33.106:9200}
+    username: ${PRIVATE_BANK_ES_USERNAME:elastic}
+    password: ${PRIVATE_BANK_ES_PASSWORD:ICBCSDCIntern@0710}
   neo4j:
-    uri: ${PRIVATE_BANK_NEO4J_URI:}
+    uri: ${PRIVATE_BANK_NEO4J_URI:http://47.116.18.232:7474/browser/}
     authentication:
-      username: ${PRIVATE_BANK_NEO4J_USERNAME:}
-      password: ${PRIVATE_BANK_NEO4J_PASSWORD:}
-    database: ${PRIVATE_BANK_NEO4J_DATABASE:}
+      username: ${PRIVATE_BANK_NEO4J_USERNAME:neo4j}
+      password: ${PRIVATE_BANK_NEO4J_PASSWORD:ICBCSDCIntern@0710}
+    database: ${PRIVATE_BANK_NEO4J_DATABASE:neo4j }
   servlet:
     multipart:
       max-file-size: 20MB
@@ -62,14 +62,14 @@ private-bank:
     max-business-repair-attempts: 2
   knowledge:
     qdrant:
-      host: ${PRIVATE_BANK_QDRANT_HOST:}
+      host: ${PRIVATE_BANK_QDRANT_HOST:124.220.33.106}
       port: ${PRIVATE_BANK_QDRANT_PORT:6334}
-      api-key: ${PRIVATE_BANK_QDRANT_API_KEY:}
+      api-key: ${PRIVATE_BANK_QDRANT_API_KEY:84f0abc6e09105509f02ea82d66bce7761428fd4bae5f5616ae4aba7f372a3e4}
       collection-name: ${PRIVATE_BANK_QDRANT_COLLECTION:}
       initialize-schema: ${PRIVATE_BANK_QDRANT_INITIALIZE_SCHEMA:false}
   security:
     jwt:
-      secret: ${PRIVATE_BANK_JWT_SECRET}
+      secret: 5614c60a743654ca88265373126e80540b4b6614aca204fd6aedc0e94bbc1770
       issuer: private-bank-backend
       ttl-minutes: 120
       renewal-threshold-minutes: 30
