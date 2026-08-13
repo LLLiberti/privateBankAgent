@@ -13,6 +13,18 @@ public interface CustomerDataMapper {
     @Select("""
             <script>
             SELECT COUNT(*)
+              FROM person
+             WHERE person_id IN
+             <foreach collection="personIds" item="personId" open="(" separator="," close=")">
+                 #{personId}
+             </foreach>
+            </script>
+            """)
+    long countExistingCustomers(@Param("personIds") List<Long> personIds);
+
+    @Select("""
+            <script>
+            SELECT COUNT(*)
               FROM person p
              WHERE 1 = 1
             <if test="allowedPersonIds != null">

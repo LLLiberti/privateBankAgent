@@ -9,3 +9,34 @@ logs/
 src/main/resources/db/migration/*.sql
 docs/
 *.docx
+.vscode/
+src/main/resources/application.yml
+sql/
+
+# ==============================
+# Python KG service
+# ==============================
+
+# Python cache / test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Runtime outputs
+output/
+*.log
+
+# IDE / OS
+.vscode/
+.DS_Store
+Thumbs.db

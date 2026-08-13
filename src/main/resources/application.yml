@@ -2,7 +2,7 @@ spring:
   application:
     name: private-bank-backend
   datasource:
-    url: ${PRIVATE_BANK_DB_URL:jdbc:mysql://47.116.18.232:3306/private_bank_agent?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}
+    url: ${PRIVATE_BANK_DB_URL}
     username: ${PRIVATE_BANK_DB_USERNAME}
     password: ${PRIVATE_BANK_DB_PASSWORD}
     hikari:
