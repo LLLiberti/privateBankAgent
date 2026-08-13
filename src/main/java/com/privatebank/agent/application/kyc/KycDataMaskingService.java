@@ -3,6 +3,7 @@ package com.privatebank.agent.application.kyc;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.privatebank.agent.domain.kyc.KycCustomerData;
+import com.privatebank.agent.domain.kyc.KycGraphRelationship;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
 import org.springframework.stereotype.Service;
 
@@ -55,11 +56,12 @@ public class KycDataMaskingService {
         collectProhibitedTerms(data, context.prohibitedTerms);
 
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("contractVersion", "kyc-input.v2");
+        payload.put("contractVersion", "kyc-input.v3");
         payload.put("person", person(data, context));
         payload.put("enterprise", enterprise(data, context));
         payload.put("family", family(data, context));
         payload.put("social", social(data, context));
+        payload.put("relationshipGraph", relationshipGraph(data.graphRelationships(), context));
         if (supplement != null && !supplement.signals().isEmpty()) {
             payload.put("managerSupplement", Map.of("signals", supplement.signals()));
         }
@@ -339,6 +341,30 @@ public class KycDataMaskingService {
         }).toList();
     }
 
+    private List<Map<String, Object>> relationshipGraph(
+            List<KycGraphRelationship> relationships, MaskingContext context) {
+        if (relationships == null || relationships.isEmpty()) {
+            return List.of();
+        }
+        return relationships.stream().map(relationship -> {
+            Map<String, Object> masked = new LinkedHashMap<>();
+            if (relationship.sourceId() != null) {
+                masked.put("sourceRef", context.sourceReference(relationship.sourceId()));
+            }
+            putAlias(masked, "startAlias", context.graphAlias(
+                    relationship.startNodeType(), relationship.startNodeId(), relationship.startIsCustomer()));
+            putControlled(masked, "startType", relationship.startNodeType());
+            putControlled(masked, "relationType", relationship.relationType());
+            putAlias(masked, "endAlias", context.graphAlias(
+                    relationship.endNodeType(), relationship.endNodeId(), relationship.endIsCustomer()));
+            putControlled(masked, "endType", relationship.endNodeType());
+            putControlled(masked, "verificationStatus", relationship.verificationStatus());
+            putNumber(masked, "confidence", relationship.confidence());
+            putNumber(masked, "distance", relationship.distance());
+            return masked;
+        }).toList();
+    }
+
     private List<Map<String, Object>> records(
             List<Map<String, Object>> source, MaskingContext context, Field... fields) {
         if (source == null || source.isEmpty()) {
@@ -564,6 +590,14 @@ public class KycDataMaskingService {
         private final Map<String, String> familyAliases = new LinkedHashMap<>();
         private final Map<String, String> organizationAliases = new LinkedHashMap<>();
         private final Map<String, String> counterpartAliases = new LinkedHashMap<>();
+        private final Map<String, String> graphPersonAliases = new LinkedHashMap<>();
+        private final Map<String, String> eventAliases = new LinkedHashMap<>();
+        private final Map<String, String> marketSegmentAliases = new LinkedHashMap<>();
+        private final Map<String, String> otherGraphAliases = new LinkedHashMap<>();
+
+        private MaskingContext() {
+            graphPersonAliases.put("CUSTOMER", "P-1");
+        }
 
         private String sourceReference(Long sourceId) {
             return referencesBySource.computeIfAbsent(sourceId, ignored -> {
@@ -587,6 +621,40 @@ public class KycDataMaskingService {
 
         private String counterpartyAlias(Map<String, Object> record) {
             return alias(counterpartAliases, "C", entityKey(record, "counterpartId", "counterpartName"));
+        }
+
+        private String graphAlias(String nodeType, String nodeId, boolean customer) {
+            if (customer) {
+                return "P-1";
+            }
+            String type = nodeType == null ? "" : nodeType;
+            String businessId = graphBusinessId(nodeId);
+            return switch (type) {
+                case "PERSON" -> alias(graphPersonAliases, "P", businessId);
+                case "ENTERPRISE" -> alias(enterpriseAliases, "E", qualifiedKey("enterpriseId", businessId));
+                case "FAMILY_MEMBER" -> alias(familyAliases, "F", qualifiedKey("familyMemberId", businessId));
+                case "FAMILY_PROFILE" -> alias(familyAliases, "F", qualifiedKey("familyProfileId", businessId));
+                case "ORGANIZATION" -> alias(organizationAliases, "O", qualifiedKey("socialOrganizationId", businessId));
+                case "EVENT" -> alias(eventAliases, "V", nodeId);
+                case "MARKET_SEGMENT" -> alias(marketSegmentAliases, "M", nodeId);
+                default -> alias(otherGraphAliases, "N", nodeId);
+            };
+        }
+
+        private String graphBusinessId(String nodeId) {
+            if (nodeId == null || nodeId.isBlank()) {
+                return null;
+            }
+            int firstSeparator = nodeId.indexOf(':');
+            if (firstSeparator > 0 && firstSeparator == nodeId.lastIndexOf(':')
+                    && firstSeparator < nodeId.length() - 1) {
+                return nodeId.substring(firstSeparator + 1);
+            }
+            return nodeId;
+        }
+
+        private String qualifiedKey(String key, String value) {
+            return value == null ? null : key + ":" + value;
         }
 
         private String entityKey(Map<String, Object> record, String... keys) {

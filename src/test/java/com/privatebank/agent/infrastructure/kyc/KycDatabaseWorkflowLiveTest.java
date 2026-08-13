@@ -9,6 +9,7 @@ import com.privatebank.agent.application.kyc.KycRuntimeSupplement;
 import com.privatebank.agent.application.kyc.KycRuntimeSupplementProjector;
 import com.privatebank.agent.application.kyc.KycAnalysisGenerator;
 import com.privatebank.agent.application.kyc.KycDataMaskingService;
+import com.privatebank.agent.application.kyc.KycGraphDataLoader;
 import com.privatebank.agent.application.kyc.KycModelClient;
 import com.privatebank.agent.application.kyc.KycOutputValidator;
 import com.privatebank.agent.application.kyc.KycWorkflowExecutionService;
@@ -95,6 +96,10 @@ class KycDatabaseWorkflowLiveTest {
     private static final String DATASOURCE_URL = configuredProperty("spring.datasource.url", "");
     private static final String DATASOURCE_USERNAME = configuredProperty("spring.datasource.username", "");
     private static final String DATASOURCE_PASSWORD = configuredProperty("spring.datasource.password", "");
+    private static final String NEO4J_URI = configuredProperty("spring.neo4j.uri", "");
+    private static final String NEO4J_USERNAME = configuredProperty("spring.neo4j.authentication.username", "");
+    private static final String NEO4J_PASSWORD = configuredProperty("spring.neo4j.authentication.password", "");
+    private static final String NEO4J_DATABASE = configuredProperty("spring.neo4j.database", "neo4j");
 
     @DynamicPropertySource
     static void liveProperties(DynamicPropertyRegistry registry) {
@@ -105,6 +110,10 @@ class KycDatabaseWorkflowLiveTest {
         registry.add("spring.datasource.hikari.keepalive-time", () -> 60000L);
         registry.add("spring.datasource.hikari.validation-timeout", () -> 5000L);
         registry.add("spring.flyway.enabled", () -> false);
+        registry.add("spring.neo4j.uri", () -> NEO4J_URI);
+        registry.add("spring.neo4j.authentication.username", () -> NEO4J_USERNAME);
+        registry.add("spring.neo4j.authentication.password", () -> NEO4J_PASSWORD);
+        registry.add("spring.neo4j.database", () -> NEO4J_DATABASE);
         registry.add("spring.ai.deepseek.base-url", () -> BASE_URL);
         registry.add("spring.ai.deepseek.api-key", () -> API_KEY);
         registry.add("spring.ai.deepseek.chat.options.model", () -> MODEL);
@@ -117,6 +126,7 @@ class KycDatabaseWorkflowLiveTest {
     static void requireLiveConfiguration() {
         Assertions.assertFalse(DATASOURCE_URL.isBlank(), "application.yml must configure the database URL");
         Assertions.assertFalse(API_KEY.isBlank(), "application.yml must configure the DeepSeek API key");
+        Assertions.assertFalse(NEO4J_URI.isBlank(), "application.yml must configure the Neo4j URI");
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -162,6 +172,9 @@ class KycDatabaseWorkflowLiveTest {
 
             KycCustomerData rawCustomerData = timed(workflowId, "LOAD_AND_MASK_LOCAL_DATA", testStartedNanos, () -> {
                 KycCustomerData customerData = customerDataLoader.load(PERSON_ID);
+                assertThat(customerData.graphRelationships())
+                        .as("personId=1 must have graph relationships in the configured Neo4j database")
+                        .isNotEmpty();
                 KycMaskedInput maskedInput = dataMaskingService.mask(customerData);
                 System.out.printf("[KYC agent runtime] phase=MASKING_COMPLETED evidenceRefCount=%d prohibitedTermCount=%d decision=invoke-model-with-masked-input-only%n"
                                 + "[KYC masked input] sha256=%s payload=%s%n",
@@ -490,8 +503,14 @@ class KycDatabaseWorkflowLiveTest {
         }
 
         @Bean
-        KycCustomerDataLoader kycCustomerDataLoader(CustomerDataMapper customerDataMapper) {
-            return new KycCustomerDataLoader(customerDataMapper);
+        KycGraphDataLoader kycGraphDataLoader() {
+            return new Neo4jKycGraphDataLoader(NEO4J_URI, NEO4J_USERNAME, NEO4J_PASSWORD, NEO4J_DATABASE);
+        }
+
+        @Bean
+        KycCustomerDataLoader kycCustomerDataLoader(
+                CustomerDataMapper customerDataMapper, KycGraphDataLoader graphDataLoader) {
+            return new KycCustomerDataLoader(customerDataMapper, graphDataLoader);
         }
 
         @Bean

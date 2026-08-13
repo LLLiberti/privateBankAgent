@@ -1,11 +1,12 @@
 package com.privatebank.agent.infrastructure.kyc;
 
 import com.privatebank.agent.domain.kyc.KycCustomerData;
+import com.privatebank.agent.application.kyc.KycGraphDataLoader;
 import com.privatebank.business.common.exception.BusinessException;
 import com.privatebank.business.common.exception.ErrorCode;
 import com.privatebank.business.dto.customer.CustomerSummaryResponse;
 import com.privatebank.business.mapper.customer.CustomerDataMapper;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -14,11 +15,21 @@ import java.util.List;
 import java.util.Map;
 
 @Service
-@RequiredArgsConstructor
 @Transactional(readOnly = true)
 public class KycCustomerDataLoader {
 
     private final CustomerDataMapper customerDataMapper;
+    private final KycGraphDataLoader graphDataLoader;
+
+    @Autowired
+    public KycCustomerDataLoader(CustomerDataMapper customerDataMapper, KycGraphDataLoader graphDataLoader) {
+        this.customerDataMapper = customerDataMapper;
+        this.graphDataLoader = graphDataLoader;
+    }
+
+    public KycCustomerDataLoader(CustomerDataMapper customerDataMapper) {
+        this(customerDataMapper, ignored -> List.of());
+    }
 
     public KycCustomerData load(Long personId) {
         CustomerSummaryResponse summary = customerDataMapper.findSummary(personId);
@@ -46,7 +57,8 @@ public class KycCustomerDataLoader {
                 emptyList(customerDataMapper.findSocialRelations(personId)),
                 emptyList(customerDataMapper.findSocialActivities(personId)),
                 emptyList(customerDataMapper.findPublicReputation(personId)),
-                emptyList(customerDataMapper.findReputationRisks(personId)));
+                emptyList(customerDataMapper.findReputationRisks(personId)),
+                graphDataLoader.loadRelationships(personId));
     }
 
     private Map<String, Object> emptyMap(Map<String, Object> value) {

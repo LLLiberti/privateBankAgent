@@ -24,7 +24,7 @@ public final class KycInputSafetyValidator {
             "memberdescription", "arrangementdescription", "candidatedescription", "title");
     private static final Pattern CONTROLLED_CODE = Pattern.compile("[A-Z][A-Z0-9_]{0,79}");
     private static final Pattern SOURCE_REF = Pattern.compile("SRC-[1-9][0-9]*");
-    private static final Pattern ENTITY_ALIAS = Pattern.compile("[PEFOC]-[1-9][0-9]*");
+    private static final Pattern ENTITY_ALIAS = Pattern.compile("[PEFOCVMN]-[1-9][0-9]*");
     private static final Pattern VERSION = Pattern.compile("kyc-input\\.v[0-9]+");
     private static final Pattern DATE_OR_PERIOD = Pattern.compile("[0-9]{4}(-[0-9]{2}(-[0-9]{2})?)?");
     private static final Pattern UNIT_OR_CURRENCY = Pattern.compile("[A-Z]{3}(_[0-9]+[A-Z])?");

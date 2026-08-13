@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.privatebank.agent.domain.kyc.KycCustomerData;
 import com.privatebank.agent.domain.kyc.KycInputValidationException;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
+import com.privatebank.agent.domain.kyc.KycGraphRelationship;
 import com.privatebank.business.dto.customer.CustomerSummaryResponse;
 import org.junit.jupiter.api.Test;
 
@@ -26,7 +27,7 @@ class KycDataMaskingServiceTest {
         KycMaskedInput input = maskingService.mask(data);
         String payload = objectMapper.writeValueAsString(input.payload());
 
-        assertThat(input.payload()).containsEntry("contractVersion", "kyc-input.v2");
+        assertThat(input.payload()).containsEntry("contractVersion", "kyc-input.v3");
         assertThat(input.sha256()).matches("[0-9a-f]{64}");
         assertThat(input.evidenceReferences()).containsKeys("SRC-1", "SRC-2", "SRC-3", "SRC-4", "SRC-5");
 
@@ -63,6 +64,42 @@ class KycDataMaskingServiceTest {
                 "长期关注人工智能和公益", "云与人工智能业务", "实施股权回购并加大人工智能投入",
                 "涉及反垄断和数据安全的监管关注", "13800138000", "原始备注");
         assertThat(payload).doesNotContain("fullName", "enterpriseName", "organizationName", "noteText", "description");
+    }
+
+    @Test
+    void projectsNeo4jRelationshipsWithoutLeakingGraphIdentifiers() throws Exception {
+        KycCustomerData base = sampleData();
+        KycCustomerData data = new KycCustomerData(
+                base.summary(), base.profile(), base.careers(), base.riskPreferences(), base.financialFacts(),
+                base.holdings(), base.financialEvents(), base.serviceRecords(), base.interactionNotes(),
+                base.enterpriseRelations(), base.enterpriseBusinesses(), base.enterpriseFinancialMetrics(),
+                base.enterpriseEvents(), base.enterpriseMarketRelations(), base.familyMembers(),
+                base.familyRelations(), base.successionArrangements(), base.socialRelations(),
+                base.socialActivities(), base.publicReputations(), base.reputationRisks(),
+                List.of(
+                        new KycGraphRelationship("PERSON:1", "PERSON", true, "CONTROLS",
+                                "ENTERPRISE:501", "ENTERPRISE", false, 501L, "VERIFIED", 0.99, 1),
+                        new KycGraphRelationship("ENTERPRISE:501", "ENTERPRISE", false, "HAS_EVENT",
+                                "EVENT:9001", "EVENT", false, 502L, "VERIFIED", 0.90, 2)));
+
+        KycMaskedInput input = maskingService.mask(data);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> graph = (List<Map<String, Object>>) input.payload().get("relationshipGraph");
+        String payload = objectMapper.writeValueAsString(input.payload());
+
+        assertThat(input.payload()).containsEntry("contractVersion", "kyc-input.v3");
+        assertThat(graph).hasSize(2);
+        assertThat(graph.get(0))
+                .containsEntry("startAlias", "P-1")
+                .containsEntry("relationType", "CONTROLS")
+                .containsEntry("endAlias", "E-1");
+        assertThat(graph.get(1))
+                .containsEntry("startAlias", "E-1")
+                .containsEntry("endAlias", "V-1")
+                .containsEntry("distance", 2);
+        assertThat(payload).doesNotContain("PERSON:1", "ENTERPRISE:501", "EVENT:9001");
+        assertThat(input.evidenceReferences().get(graph.get(0).get("sourceRef"))).isEqualTo(501L);
+        assertThat(input.evidenceReferences().get(graph.get(1).get("sourceRef"))).isEqualTo(502L);
     }
 
     @Test
