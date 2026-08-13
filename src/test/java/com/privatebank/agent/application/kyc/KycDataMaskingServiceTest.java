@@ -7,12 +7,14 @@ import com.privatebank.agent.domain.kyc.KycMaskedInput;
 import com.privatebank.agent.domain.kyc.KycGraphRelationship;
 import com.privatebank.business.dto.customer.CustomerSummaryResponse;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class KycDataMaskingServiceTest {
@@ -21,13 +23,21 @@ class KycDataMaskingServiceTest {
     private final KycDataMaskingService maskingService = new KycDataMaskingService(objectMapper);
 
     @Test
+    void createsMaskingServiceThroughSpringWhenMultipleConstructorsExist() {
+        new ApplicationContextRunner()
+                .withBean(ObjectMapper.class, () -> objectMapper)
+                .withUserConfiguration(KycDataMaskingService.class)
+                .run(context -> assertThat(context).hasSingleBean(KycDataMaskingService.class));
+    }
+
+    @Test
     void projectsFourDimensionsIntoAliasesAndControlledSemanticCodes() throws Exception {
         KycCustomerData data = sampleData();
 
         KycMaskedInput input = maskingService.mask(data);
         String payload = objectMapper.writeValueAsString(input.payload());
 
-        assertThat(input.payload()).containsEntry("contractVersion", "kyc-input.v3");
+        assertThat(input.payload()).containsEntry("contractVersion", "kyc-input.v4");
         assertThat(input.sha256()).matches("[0-9a-f]{64}");
         assertThat(input.evidenceReferences()).containsKeys("SRC-1", "SRC-2", "SRC-3", "SRC-4", "SRC-5");
 
@@ -60,10 +70,11 @@ class KycDataMaskingServiceTest {
                 .containsEntry("riskCategories", List.of("ANTITRUST", "DATA_SECURITY"));
 
         assertThat(payload).doesNotContain(
-                "马化腾", "腾讯", "深圳", "某慈善基金会", "某竞争企业", "张三",
+                "马化腾", "腾讯", "某慈善基金会", "某竞争企业", "张三", "13800138000");
+        assertThat(payload).contains(
                 "长期关注人工智能和公益", "云与人工智能业务", "实施股权回购并加大人工智能投入",
-                "涉及反垄断和数据安全的监管关注", "13800138000", "原始备注");
-        assertThat(payload).doesNotContain("fullName", "enterpriseName", "organizationName", "noteText", "description");
+                "涉及反垄断和数据安全的监管关注", "原始备注");
+        assertThat(payload).doesNotContain("fullName", "enterpriseName", "organizationName");
     }
 
     @Test
@@ -84,10 +95,15 @@ class KycDataMaskingServiceTest {
 
         KycMaskedInput input = maskingService.mask(data);
         @SuppressWarnings("unchecked")
-        List<Map<String, Object>> graph = (List<Map<String, Object>>) input.payload().get("relationshipGraph");
+        Map<String, Object> graphProjection = (Map<String, Object>) input.payload().get("relationshipGraph");
+        List<Map<String, Object>> graph = (List<Map<String, Object>>) graphProjection.get("relationships");
         String payload = objectMapper.writeValueAsString(input.payload());
 
-        assertThat(input.payload()).containsEntry("contractVersion", "kyc-input.v3");
+        assertThat(input.payload()).containsEntry("contractVersion", "kyc-input.v4");
+        assertThat(graphProjection)
+                .containsEntry("available", true)
+                .containsEntry("relationshipCount", 2)
+                .containsKey("evidenceRefs");
         assertThat(graph).hasSize(2);
         assertThat(graph.get(0))
                 .containsEntry("startAlias", "P-1")
@@ -96,10 +112,37 @@ class KycDataMaskingServiceTest {
         assertThat(graph.get(1))
                 .containsEntry("startAlias", "E-1")
                 .containsEntry("endAlias", "V-1")
-                .containsEntry("distance", 2);
+                .containsEntry("distance", 2)
+                .containsEntry("pathScope", "TWO_HOP")
+                .containsEntry("evidenceOrigin", "NEO4J_RELATIONSHIP");
         assertThat(payload).doesNotContain("PERSON:1", "ENTERPRISE:501", "EVENT:9001");
         assertThat(input.evidenceReferences().get(graph.get(0).get("sourceRef"))).isEqualTo(501L);
         assertThat(input.evidenceReferences().get(graph.get(1).get("sourceRef"))).isEqualTo(502L);
+    }
+
+    @Test
+    void retainsUnknownBusinessFieldsWhileRedactingIdentifiersRecursively() throws Exception {
+        KycCustomerData base = sampleData();
+        Map<String, Object> unknownRiskRecord = new java.util.LinkedHashMap<>();
+        unknownRiskRecord.put("source_id", 777L);
+        unknownRiskRecord.put("investment_horizon", "5年以上");
+        unknownRiskRecord.put("liquidity_requirement", "中等");
+        unknownRiskRecord.put("custom_scenario", Map.of(
+                "comment", "马化腾计划联系13800138000并长期配置人工智能主题",
+                "allocation_ratio", 45));
+        KycCustomerData data = new KycCustomerData(
+                base.summary(), base.profile(), base.careers(), List.of(unknownRiskRecord), base.financialFacts(),
+                base.holdings(), base.financialEvents(), base.serviceRecords(), base.interactionNotes(),
+                base.enterpriseRelations(), base.enterpriseBusinesses(), base.enterpriseFinancialMetrics(),
+                base.enterpriseEvents(), base.enterpriseMarketRelations(), base.familyMembers(),
+                base.familyRelations(), base.successionArrangements(), base.socialRelations(),
+                base.socialActivities(), base.publicReputations(), base.reputationRisks(), base.graphRelationships());
+
+        String payload = objectMapper.writeValueAsString(maskingService.mask(data).payload());
+
+        assertThat(payload).contains("5年以上", "中等", "custom_scenario", "allocation_ratio", "长期配置人工智能主题");
+        assertThat(payload).contains("P-1", "[PHONE_REDACTED]");
+        assertThat(payload).doesNotContain("马化腾", "13800138000");
     }
 
     @Test
@@ -107,13 +150,16 @@ class KycDataMaskingServiceTest {
         KycInputSafetyValidator validator = new KycInputSafetyValidator();
 
         assertThatThrownBy(() -> validator.validate(
-                Map.of("contractVersion", "kyc-input.v2", "person", Map.of("noteText", "原始备注")), Set.of()))
+                Map.of("contractVersion", "kyc-input.v4", "person", Map.of("rawText", "原始备注")), Set.of()))
                 .isInstanceOf(KycInputValidationException.class)
                 .hasMessageContaining("禁止字段");
+        assertThatCode(() -> validator.validate(
+                Map.of("contractVersion", "kyc-input.v4", "person", Map.of("signal", "原始备注")), Set.of()))
+                .doesNotThrowAnyException();
         assertThatThrownBy(() -> validator.validate(
-                Map.of("contractVersion", "kyc-input.v2", "person", Map.of("signal", "原始备注")), Set.of()))
+                Map.of("contractVersion", "kyc-input.v4", "person", Map.of("signal", "联系13800138000")), Set.of()))
                 .isInstanceOf(KycInputValidationException.class)
-                .hasMessageContaining("非受控文本");
+                .hasMessageContaining("格式化敏感信息");
     }
 
     @SuppressWarnings("unchecked")

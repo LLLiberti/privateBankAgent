@@ -95,8 +95,43 @@ class KycAgentExecutorTest {
         assertThat(calls).hasValue(1);
         assertThat(captured.get().name()).isEqualTo("kyc-agent");
         assertThat(captured.get().outputType()).isEqualTo(KycStructuredResult.class);
-        assertThat(captured.get().systemPrompt()).contains("SRC-*", "不得猜测", "dataGaps");
+        assertThat(captured.get().systemPrompt()).contains("SRC-*", "不得猜测", "dataGaps", "graphAssessment");
         assertThat(captured.get().userPrompt()).contains("customer", "riskLevel");
+    }
+
+    @Test
+    void acceptsIncrementalGraphAssessmentOnlyWhenFindingUsesNeo4jEvidence() {
+        KycMaskedInput graphInput = new KycMaskedInput(
+                Map.of(
+                        "person", Map.of("customer", Map.of("riskLevel", "HIGH")),
+                        "relationshipGraph", Map.of(
+                                "available", true,
+                                "relationshipCount", 1,
+                                "evidenceRefs", List.of("SRC-2"),
+                                "relationships", List.of(Map.of("sourceRef", "SRC-2")))),
+                Map.of("SRC-1", 1001L, "SRC-2", 2001L),
+                Set.of(),
+                "c".repeat(64));
+        KycStructuredResult graphResult = new KycStructuredResult(
+                KycStructuredResult.RiskLevel.HIGH,
+                "图关系提供了结构化事实之外的二跳关联",
+                List.of(new KycStructuredResult.Finding(
+                        KycStructuredResult.Dimension.ENTERPRISE,
+                        KycStructuredResult.RiskLevel.MEDIUM,
+                        "发现新增二跳关联",
+                        List.of("SRC-2"))),
+                List.of(), List.of(), List.of(),
+                new KycStructuredResult.GraphAssessment(
+                        KycStructuredResult.GraphContribution.INCREMENTAL,
+                        "Neo4j 提供了新增关系",
+                        List.of("SRC-2")));
+
+        AgentExecutionResult<KycStructuredResult> result = executor(runtime(new AtomicInteger(), graphResult), 1)
+                .execute(new AgentExecutionRequest<>(
+                        "WF-1", "EXE-1", AgentType.CUSTOMER_INSIGHT, "SYSTEM", graphInput, Map.of()));
+
+        assertThat(result.output().graphAssessment().contribution())
+                .isEqualTo(KycStructuredResult.GraphContribution.INCREMENTAL);
     }
 
     private StructuredAgentRuntime runtime(AtomicInteger calls, KycStructuredResult output) {
@@ -123,7 +158,9 @@ class KycAgentExecutorTest {
 
     private KycMaskedInput input() {
         return new KycMaskedInput(
-                Map.of("person", Map.of("customer", Map.of("riskLevel", "HIGH"))),
+                Map.of("person", Map.of("customer", Map.of("riskLevel", "HIGH")),
+                        "relationshipGraph", Map.of("available", false, "relationshipCount", 0,
+                                "evidenceRefs", List.of(), "relationships", List.of())),
                 Map.of("SRC-1", 1001L),
                 Set.of("张三", "星海集团"),
                 "a".repeat(64));
@@ -140,7 +177,11 @@ class KycAgentExecutorTest {
                         List.of("SRC-1"))),
                 List.of("风险偏高"),
                 List.of("复核风险偏好"),
-                List.of());
+                List.of(),
+                new KycStructuredResult.GraphAssessment(
+                        KycStructuredResult.GraphContribution.NOT_AVAILABLE,
+                        "当前没有可用的 Neo4j 关系投影",
+                        List.of()));
     }
 
     private KycStructuredResult resultWithEvidence(String evidence) {
@@ -152,6 +193,6 @@ class KycAgentExecutorTest {
                         KycStructuredResult.RiskLevel.HIGH,
                         "资产风险偏高",
                         List.of(evidence))),
-                valid.riskAlerts(), valid.recommendedActions(), valid.dataGaps());
+                valid.riskAlerts(), valid.recommendedActions(), valid.dataGaps(), valid.graphAssessment());
     }
 }

@@ -18,11 +18,16 @@ import java.util.Set;
 public class KycOutputValidator {
 
     private static final Set<String> ROOT_FIELDS = Set.of(
-            "riskLevel", "summary", "findings", "riskAlerts", "recommendedActions", "dataGaps");
+            "riskLevel", "summary", "findings", "riskAlerts", "recommendedActions", "dataGaps",
+            "graphAssessment");
     private static final Set<String> FINDING_FIELDS = Set.of(
             "dimension", "riskLevel", "finding", "evidenceRefs");
+    private static final Set<String> GRAPH_ASSESSMENT_FIELDS = Set.of(
+            "contribution", "summary", "evidenceRefs");
     private static final Set<String> RISK_LEVELS = Set.of("LOW", "MEDIUM", "HIGH", "UNKNOWN");
     private static final Set<String> DIMENSIONS = Set.of("PERSON", "ENTERPRISE", "FAMILY", "SOCIAL");
+    private static final Set<String> GRAPH_CONTRIBUTIONS = Set.of(
+            "INCREMENTAL", "CONFIRMATORY", "NO_INCREMENT", "NOT_AVAILABLE");
 
     private final ObjectMapper objectMapper;
 
@@ -36,12 +41,74 @@ public class KycOutputValidator {
         validateTextArray(root.path("riskAlerts"), 20, 600, "riskAlerts 无效");
         validateTextArray(root.path("recommendedActions"), 20, 600, "recommendedActions 无效");
         validateTextArray(root.path("dataGaps"), 20, 600, "dataGaps 无效");
+        validateGraphAssessment(root.path("graphAssessment"), root.path("findings"), input);
         rejectProhibitedTerms(root.toString(), input.prohibitedTerms());
         try {
             return objectMapper.writeValueAsString(root);
         } catch (JsonProcessingException exception) {
             throw new KycOutputValidationException("KYC 结果无法序列化");
         }
+    }
+
+    private void validateGraphAssessment(JsonNode assessment, JsonNode findings, KycMaskedInput input) {
+        requireObject(assessment, "graphAssessment 必须是对象");
+        requireExactFields(assessment, GRAPH_ASSESSMENT_FIELDS, "graphAssessment 字段不符合 KYC 合约");
+        requireEnum(assessment.path("contribution"), GRAPH_CONTRIBUTIONS, "graphAssessment.contribution 无效");
+        requireText(assessment.path("summary"), 600, "graphAssessment.summary 无效");
+
+        Set<String> graphEvidence = graphEvidence(input);
+        JsonNode evidenceRefs = assessment.path("evidenceRefs");
+        if (!evidenceRefs.isArray() || evidenceRefs.size() > 20) {
+            throw new KycOutputValidationException("graphAssessment.evidenceRefs 无效");
+        }
+        for (JsonNode evidenceRef : evidenceRefs) {
+            if (!evidenceRef.isTextual() || !graphEvidence.contains(evidenceRef.asText())) {
+                throw new KycOutputValidationException("graphAssessment 引用了非 Neo4j 关系证据");
+            }
+        }
+
+        String contribution = assessment.path("contribution").asText();
+        if (graphEvidence.isEmpty()) {
+            if (!"NOT_AVAILABLE".equals(contribution) || !evidenceRefs.isEmpty()) {
+                throw new KycOutputValidationException("Neo4j 关系不可用时 graphAssessment 必须为 NOT_AVAILABLE");
+            }
+            return;
+        }
+        if ("NOT_AVAILABLE".equals(contribution) || evidenceRefs.isEmpty()) {
+            throw new KycOutputValidationException("Neo4j 关系可用时必须给出贡献判断和关系证据");
+        }
+        if ("INCREMENTAL".equals(contribution) && !findingsUseEvidence(findings, graphEvidence)) {
+            throw new KycOutputValidationException("Neo4j 标记为 INCREMENTAL 时至少一条 finding 必须引用图关系证据");
+        }
+    }
+
+    private Set<String> graphEvidence(KycMaskedInput input) {
+        Object graphValue = input.payload().get("relationshipGraph");
+        if (!(graphValue instanceof java.util.Map<?, ?> graph)) {
+            return Set.of();
+        }
+        Object refsValue = graph.get("evidenceRefs");
+        if (!(refsValue instanceof Iterable<?> refs)) {
+            return Set.of();
+        }
+        Set<String> result = new LinkedHashSet<>();
+        for (Object ref : refs) {
+            if (ref instanceof String text && input.evidenceReferences().containsKey(text)) {
+                result.add(text);
+            }
+        }
+        return Set.copyOf(result);
+    }
+
+    private boolean findingsUseEvidence(JsonNode findings, Set<String> evidence) {
+        for (JsonNode finding : findings) {
+            for (JsonNode evidenceRef : finding.path("evidenceRefs")) {
+                if (evidenceRef.isTextual() && evidence.contains(evidenceRef.asText())) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private JsonNode parse(String rawOutput) {

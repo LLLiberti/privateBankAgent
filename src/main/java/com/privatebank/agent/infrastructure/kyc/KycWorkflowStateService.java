@@ -152,7 +152,7 @@ public class KycWorkflowStateService {
         try {
             JsonNode analysis = objectMapper.readTree(result.analysisJson());
             return objectMapper.writeValueAsString(Map.of(
-                    "contractVersion", "kyc-result.v1",
+                    "contractVersion", "kyc-result.v2",
                     "model", result.modelName(),
                     "modelAttempts", result.attempts(),
                     "maskingApplied", true,
