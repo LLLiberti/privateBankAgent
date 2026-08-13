@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.privatebank.agent.domain.kyc.KycCustomerData;
 import com.privatebank.agent.domain.kyc.KycGraphRelationship;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -49,6 +50,7 @@ public class KycDataMaskingService {
     private final KycSemanticProjectionService semanticProjectionService;
     private final KycInputSafetyValidator inputSafetyValidator;
 
+    @Autowired
     public KycDataMaskingService(ObjectMapper objectMapper) {
         this(objectMapper, new KycSemanticProjectionService(), new KycInputSafetyValidator());
     }

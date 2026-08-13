@@ -7,6 +7,7 @@ import com.privatebank.agent.domain.kyc.KycMaskedInput;
 import com.privatebank.agent.domain.kyc.KycGraphRelationship;
 import com.privatebank.business.dto.customer.CustomerSummaryResponse;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import java.util.List;
 import java.util.Map;
@@ -20,6 +21,14 @@ class KycDataMaskingServiceTest {
 
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
     private final KycDataMaskingService maskingService = new KycDataMaskingService(objectMapper);
+
+    @Test
+    void createsMaskingServiceThroughSpringWhenMultipleConstructorsExist() {
+        new ApplicationContextRunner()
+                .withBean(ObjectMapper.class, () -> objectMapper)
+                .withUserConfiguration(KycDataMaskingService.class)
+                .run(context -> assertThat(context).hasSingleBean(KycDataMaskingService.class));
+    }
 
     @Test
     void projectsFourDimensionsIntoAliasesAndControlledSemanticCodes() throws Exception {
