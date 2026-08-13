@@ -1,7 +1,7 @@
 package com.privatebank.business.security;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.privatebank.business.entity.auth.RoleName;
+import com.privatebank.business.enums.auth.RoleName;
 import com.privatebank.business.entity.auth.SysRole;
 import com.privatebank.business.entity.auth.SysUser;
 import com.privatebank.business.mapper.auth.SysRoleMapper;

@@ -1,6 +1,5 @@
 package com.privatebank.business.controller.workflow;
 
-import com.privatebank.business.dto.workflow.AgentStateResponse;
 import com.privatebank.business.dto.workflow.ArtifactRefResponse;
 import com.privatebank.business.dto.workflow.CancelRequest;
 import com.privatebank.business.dto.workflow.CreateWorkflowRequest;
@@ -15,7 +14,7 @@ import com.privatebank.business.dto.workflow.WorkflowResultResponse;
 import com.privatebank.business.dto.common.PageResponse;
 import com.privatebank.business.security.CurrentUserPrincipal;
 import com.privatebank.business.service.workflow.WorkflowService;
-import com.privatebank.business.entity.workflow.AgentType;
+import com.privatebank.business.enums.workflow.AgentType;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;

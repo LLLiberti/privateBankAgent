@@ -1,8 +1,8 @@
 package com.privatebank.business.dto.workflow;
 
 import com.privatebank.business.entity.workflow.AgentState;
-import com.privatebank.business.entity.workflow.AgentStatus;
-import com.privatebank.business.entity.workflow.AgentType;
+import com.privatebank.business.enums.workflow.AgentStatus;
+import com.privatebank.business.enums.workflow.AgentType;
 
 public record AgentStateResponse(
         String agentStateId,

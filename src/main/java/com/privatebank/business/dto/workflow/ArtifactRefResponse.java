@@ -1,7 +1,7 @@
 package com.privatebank.business.dto.workflow;
 
 import com.privatebank.business.entity.workflow.AgentArtifact;
-import com.privatebank.business.entity.workflow.AgentType;
+import com.privatebank.business.enums.workflow.AgentType;
 
 import java.time.LocalDateTime;
 

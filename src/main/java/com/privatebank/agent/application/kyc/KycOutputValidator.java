@@ -1,0 +1,132 @@
+package com.privatebank.agent.application.kyc;
+
+import com.privatebank.agent.domain.kyc.KycMaskedInput;
+import com.privatebank.agent.domain.kyc.KycOutputValidationException;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Component;
+
+import java.util.Iterator;
+import java.util.LinkedHashSet;
+import java.util.Locale;
+import java.util.Set;
+
+@Component
+@RequiredArgsConstructor
+public class KycOutputValidator {
+
+    private static final Set<String> ROOT_FIELDS = Set.of(
+            "riskLevel", "summary", "findings", "riskAlerts", "recommendedActions", "dataGaps");
+    private static final Set<String> FINDING_FIELDS = Set.of(
+            "dimension", "riskLevel", "finding", "evidenceRefs");
+    private static final Set<String> RISK_LEVELS = Set.of("LOW", "MEDIUM", "HIGH", "UNKNOWN");
+    private static final Set<String> DIMENSIONS = Set.of("PERSON", "ENTERPRISE", "FAMILY", "SOCIAL");
+
+    private final ObjectMapper objectMapper;
+
+    public String validate(String rawOutput, KycMaskedInput input) {
+        JsonNode root = parse(rawOutput);
+        requireObject(root, "根节点必须是 JSON 对象");
+        requireExactFields(root, ROOT_FIELDS, "根节点字段不符合 KYC 合约");
+        requireEnum(root.path("riskLevel"), RISK_LEVELS, "riskLevel 无效");
+        requireText(root.path("summary"), 1200, "summary 无效");
+        validateFindings(root.path("findings"), input.evidenceReferences().keySet());
+        validateTextArray(root.path("riskAlerts"), 20, 600, "riskAlerts 无效");
+        validateTextArray(root.path("recommendedActions"), 20, 600, "recommendedActions 无效");
+        validateTextArray(root.path("dataGaps"), 20, 600, "dataGaps 无效");
+        rejectProhibitedTerms(root.toString(), input.prohibitedTerms());
+        try {
+            return objectMapper.writeValueAsString(root);
+        } catch (JsonProcessingException exception) {
+            throw new KycOutputValidationException("KYC 结果无法序列化");
+        }
+    }
+
+    private JsonNode parse(String rawOutput) {
+        if (rawOutput == null || rawOutput.isBlank()) {
+            throw new KycOutputValidationException("模型未返回 JSON");
+        }
+        String cleaned = rawOutput.trim();
+        if (cleaned.startsWith("```")) {
+            int firstLineEnd = cleaned.indexOf('\n');
+            cleaned = firstLineEnd < 0 ? "" : cleaned.substring(firstLineEnd + 1);
+            if (cleaned.endsWith("```")) {
+                cleaned = cleaned.substring(0, cleaned.length() - 3).trim();
+            }
+        }
+        try {
+            return objectMapper.readTree(cleaned);
+        } catch (JsonProcessingException exception) {
+            throw new KycOutputValidationException("模型返回的内容不是有效 JSON");
+        }
+    }
+
+    private void validateFindings(JsonNode findings, Set<String> allowedEvidence) {
+        if (!findings.isArray() || findings.size() > 20) {
+            throw new KycOutputValidationException("findings 必须是最多 20 项的数组");
+        }
+        for (JsonNode finding : findings) {
+            requireObject(finding, "finding 必须是对象");
+            requireExactFields(finding, FINDING_FIELDS, "finding 字段不符合 KYC 合约");
+            requireEnum(finding.path("dimension"), DIMENSIONS, "finding.dimension 无效");
+            requireEnum(finding.path("riskLevel"), RISK_LEVELS, "finding.riskLevel 无效");
+            requireText(finding.path("finding"), 800, "finding.finding 无效");
+            if (!finding.path("evidenceRefs").isArray() || finding.path("evidenceRefs").size() > 10) {
+                throw new KycOutputValidationException("finding.evidenceRefs 无效");
+            }
+            for (JsonNode evidenceRef : finding.path("evidenceRefs")) {
+                if (!evidenceRef.isTextual() || !allowedEvidence.contains(evidenceRef.asText())) {
+                    throw new KycOutputValidationException("finding 引用了不存在的证据");
+                }
+            }
+        }
+    }
+
+    private void validateTextArray(JsonNode value, int maxItems, int maxLength, String message) {
+        if (!value.isArray() || value.size() > maxItems) {
+            throw new KycOutputValidationException(message);
+        }
+        for (JsonNode item : value) {
+            requireText(item, maxLength, message);
+        }
+    }
+
+    private void requireExactFields(JsonNode object, Set<String> expected, String message) {
+        Set<String> actual = new LinkedHashSet<>();
+        Iterator<String> fields = object.fieldNames();
+        fields.forEachRemaining(actual::add);
+        if (!actual.equals(expected)) {
+            throw new KycOutputValidationException(message);
+        }
+    }
+
+    private void requireObject(JsonNode value, String message) {
+        if (!value.isObject()) {
+            throw new KycOutputValidationException(message);
+        }
+    }
+
+    private void requireEnum(JsonNode value, Set<String> allowed, String message) {
+        if (!value.isTextual() || !allowed.contains(value.asText())) {
+            throw new KycOutputValidationException(message);
+        }
+    }
+
+    private void requireText(JsonNode value, int maxLength, String message) {
+        if (!value.isTextual() || value.asText().isBlank() || value.asText().length() > maxLength) {
+            throw new KycOutputValidationException(message);
+        }
+    }
+
+    private void rejectProhibitedTerms(String output, Set<String> prohibitedTerms) {
+        String normalizedOutput = output.toLowerCase(Locale.ROOT);
+        boolean leaked = prohibitedTerms.stream()
+                .map(term -> term.toLowerCase(Locale.ROOT))
+                .anyMatch(normalizedOutput::contains);
+        if (leaked) {
+            throw new KycOutputValidationException("KYC 结果包含未脱敏标识");
+        }
+    }
+}

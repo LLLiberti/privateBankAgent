@@ -1,4 +1,4 @@
-package com.privatebank.business.entity.auth;
+package com.privatebank.business.enums.auth;
 
 public enum RoleName {
     CUSTOMER_MANAGER,
