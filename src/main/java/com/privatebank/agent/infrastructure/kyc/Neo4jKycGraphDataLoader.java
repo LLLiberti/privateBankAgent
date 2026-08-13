@@ -9,6 +9,7 @@ import org.neo4j.driver.GraphDatabase;
 import org.neo4j.driver.Record;
 import org.neo4j.driver.Session;
 import org.neo4j.driver.SessionConfig;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -50,6 +51,7 @@ public class Neo4jKycGraphDataLoader implements KycGraphDataLoader {
     private final String database;
     private final boolean configured;
 
+    @Autowired
     public Neo4jKycGraphDataLoader(
             @Value("${spring.neo4j.uri:}") String uri,
             @Value("${spring.neo4j.authentication.username:}") String username,

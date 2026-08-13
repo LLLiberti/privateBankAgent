@@ -1,11 +1,22 @@
 package com.privatebank.agent.infrastructure.kyc;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class Neo4jKycGraphDataLoaderTest {
+
+    private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
+            .withUserConfiguration(Neo4jKycGraphDataLoader.class)
+            .withPropertyValues("spring.neo4j.uri=");
+
+    @Test
+    void createsLoaderThroughSpringWhenMultipleConstructorsExist() {
+        contextRunner.run(context -> assertThat(context)
+                .hasSingleBean(Neo4jKycGraphDataLoader.class));
+    }
 
     @Test
     void convertsNeo4jBrowserHttpUriToBoltUri() {
