@@ -7,12 +7,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.privatebank.agent.adapter.workflow.KycWorkflowListener;
 import com.privatebank.agent.application.kyc.KycRuntimeSupplement;
 import com.privatebank.agent.application.kyc.KycRuntimeSupplementProjector;
-import com.privatebank.agent.application.kyc.KycAnalysisGenerator;
+import com.privatebank.agent.application.kyc.KycAgentExecutor;
 import com.privatebank.agent.application.kyc.KycDataMaskingService;
 import com.privatebank.agent.application.kyc.KycGraphDataLoader;
-import com.privatebank.agent.application.kyc.KycModelClient;
 import com.privatebank.agent.application.kyc.KycOutputValidator;
 import com.privatebank.agent.application.kyc.KycWorkflowExecutionService;
+import com.privatebank.agent.application.runtime.AgentProgressPublisher;
+import com.privatebank.agent.config.AgentScopeConfiguration;
+import com.privatebank.agent.config.AgentScopeProperties;
+import com.privatebank.agent.infrastructure.agentscope.AgentRuntimeContextFactory;
+import com.privatebank.agent.infrastructure.agentscope.AgentScopeExecutionEngine;
 import com.privatebank.agent.domain.kyc.KycCustomerData;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
 import com.privatebank.business.common.idempotency.IdempotencyExecutor;
@@ -47,10 +51,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
-import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.model.deepseek.autoconfigure.DeepSeekChatAutoConfiguration;
-import org.springframework.ai.model.tool.autoconfigure.ToolCallingAutoConfiguration;
-import org.springframework.ai.retry.autoconfigure.SpringAiRetryAutoConfiguration;
+import io.agentscope.core.model.Model;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration;
@@ -90,9 +91,11 @@ class KycDatabaseWorkflowLiveTest {
     private static final long PERSON_ID = 1L;
     private static final long IMPORT_BATCH_ID = 1L;
     private static final String CUSTOMER_MANAGER_ID = "USER-DEMO-CUSTOMER-MANAGER";
-    private static final String API_KEY = configuredProperty("spring.ai.deepseek.api-key", "");
-    private static final String BASE_URL = configuredProperty("spring.ai.deepseek.base-url", "https://api.deepseek.com");
-    private static final String MODEL = configuredProperty("spring.ai.deepseek.chat.options.model", "deepseek-v4-flash");
+    private static final String API_KEY = configuredProperty("private-bank.agent-runtime.deepseek.api-key", "");
+    private static final String BASE_URL = configuredProperty(
+            "private-bank.agent-runtime.deepseek.base-url", "https://api.deepseek.com/v1");
+    private static final String MODEL = configuredProperty(
+            "private-bank.agent-runtime.deepseek.model", "deepseek-v4-flash");
     private static final String DATASOURCE_URL = configuredProperty("spring.datasource.url", "");
     private static final String DATASOURCE_USERNAME = configuredProperty("spring.datasource.username", "");
     private static final String DATASOURCE_PASSWORD = configuredProperty("spring.datasource.password", "");
@@ -114,10 +117,6 @@ class KycDatabaseWorkflowLiveTest {
         registry.add("spring.neo4j.authentication.username", () -> NEO4J_USERNAME);
         registry.add("spring.neo4j.authentication.password", () -> NEO4J_PASSWORD);
         registry.add("spring.neo4j.database", () -> NEO4J_DATABASE);
-        registry.add("spring.ai.deepseek.base-url", () -> BASE_URL);
-        registry.add("spring.ai.deepseek.api-key", () -> API_KEY);
-        registry.add("spring.ai.deepseek.chat.options.model", () -> MODEL);
-        registry.add("spring.ai.deepseek.chat.options.temperature", () -> 0);
         registry.add("private-bank.storage.root", () -> "./target/live-kyc-test-storage");
         registry.add("private-bank.storage.max-file-size-bytes", () -> 1048576L);
     }
@@ -469,10 +468,7 @@ class KycDatabaseWorkflowLiveTest {
             DataSourceAutoConfiguration.class,
             DataSourceTransactionManagerAutoConfiguration.class,
             TransactionAutoConfiguration.class,
-            MybatisPlusAutoConfiguration.class,
-            SpringAiRetryAutoConfiguration.class,
-            ToolCallingAutoConfiguration.class,
-            DeepSeekChatAutoConfiguration.class
+            MybatisPlusAutoConfiguration.class
     })
     static class LiveDatabaseWorkflowConfiguration {
 
@@ -487,14 +483,42 @@ class KycDatabaseWorkflowLiveTest {
         }
 
         @Bean
-        KycModelClient kycModelClient(ChatModel chatModel) {
-            return new SpringAiKycModelClient(chatModel);
+        AgentScopeProperties agentScopeProperties() {
+            return new AgentScopeProperties(
+                    new AgentScopeProperties.DeepSeek(BASE_URL, API_KEY, MODEL, 0D), 2, 4, 2);
         }
 
         @Bean
-        KycAnalysisGenerator kycAnalysisGenerator(
-                KycModelClient kycModelClient, KycOutputValidator kycOutputValidator, ObjectMapper objectMapper) {
-            return new KycAnalysisGenerator(kycModelClient, kycOutputValidator, objectMapper);
+        Model privateBankAgentModel(AgentScopeProperties properties) {
+            return new AgentScopeConfiguration().privateBankAgentModel(properties);
+        }
+
+        @Bean
+        AgentRuntimeContextFactory agentRuntimeContextFactory() {
+            return new AgentRuntimeContextFactory();
+        }
+
+        @Bean
+        AgentProgressPublisher agentProgressPublisher() {
+            return ignored -> { };
+        }
+
+        @Bean
+        AgentScopeExecutionEngine agentScopeExecutionEngine(
+                Model model,
+                AgentScopeProperties properties,
+                AgentRuntimeContextFactory contextFactory,
+                AgentProgressPublisher progressPublisher) {
+            return new AgentScopeExecutionEngine(model, properties, contextFactory, progressPublisher);
+        }
+
+        @Bean
+        KycAgentExecutor kycAgentExecutor(
+                AgentScopeExecutionEngine runtime,
+                KycOutputValidator validator,
+                ObjectMapper objectMapper,
+                AgentScopeProperties properties) {
+            return new KycAgentExecutor(runtime, validator, objectMapper, properties);
         }
 
         @Bean
@@ -529,8 +553,8 @@ class KycDatabaseWorkflowLiveTest {
                 KycWorkflowStateService stateService,
                 KycCustomerDataLoader dataLoader,
                 KycDataMaskingService maskingService,
-                KycAnalysisGenerator analysisGenerator) {
-            return new KycWorkflowExecutionService(stateService, dataLoader, maskingService, analysisGenerator);
+                KycAgentExecutor kycAgentExecutor) {
+            return new KycWorkflowExecutionService(stateService, dataLoader, maskingService, kycAgentExecutor);
         }
 
         @Bean

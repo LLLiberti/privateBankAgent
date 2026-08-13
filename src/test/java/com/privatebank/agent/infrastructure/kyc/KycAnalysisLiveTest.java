@@ -1,31 +1,25 @@
 package com.privatebank.agent.infrastructure.kyc;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.privatebank.agent.application.kyc.KycAnalysisGenerator;
-import com.privatebank.agent.application.kyc.KycModelClient;
+import com.privatebank.agent.application.kyc.KycAgentExecutor;
 import com.privatebank.agent.application.kyc.KycOutputValidator;
-import com.privatebank.agent.domain.kyc.KycGenerationResult;
+import com.privatebank.agent.application.runtime.AgentExecutionRequest;
+import com.privatebank.agent.application.runtime.AgentExecutionResult;
+import com.privatebank.agent.config.AgentScopeConfiguration;
+import com.privatebank.agent.config.AgentScopeProperties;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
+import com.privatebank.agent.domain.kyc.KycStructuredResult;
+import com.privatebank.agent.infrastructure.agentscope.AgentRuntimeContextFactory;
+import com.privatebank.agent.infrastructure.agentscope.AgentScopeExecutionEngine;
+import com.privatebank.business.enums.workflow.AgentType;
+import io.agentscope.core.model.Model;
 import org.junit.jupiter.api.Assumptions;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
-import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.model.deepseek.autoconfigure.DeepSeekChatAutoConfiguration;
-import org.springframework.ai.model.tool.autoconfigure.ToolCallingAutoConfiguration;
-import org.springframework.ai.retry.autoconfigure.SpringAiRetryAutoConfiguration;
-import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
 import org.springframework.boot.env.YamlPropertySourceLoader;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.PropertySource;
 import org.springframework.core.io.FileSystemResource;
-import org.springframework.test.context.ContextConfiguration;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
-import org.springframework.test.context.junit.jupiter.SpringJUnitConfig;
 
 import java.io.IOException;
 import java.util.List;
@@ -34,97 +28,49 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Calls the configured DeepSeek model. It is skipped unless the key is supplied through the
- * environment, so normal tests never send data or consume an API quota.
- */
+/** Explicit real-model test. The user enables and runs it manually. */
 @Tag("live")
 @EnabledIfSystemProperty(named = "private-bank.test.live-kyc", matches = "true")
-@SpringJUnitConfig
-@ContextConfiguration(classes = KycAnalysisLiveTest.LiveConfiguration.class)
 class KycAnalysisLiveTest {
 
-    private static final String API_KEY = configuredProperty("spring.ai.deepseek.api-key", "");
-    private static final String BASE_URL = configuredProperty("spring.ai.deepseek.base-url", "https://api.deepseek.com");
-    private static final String MODEL = configuredProperty("spring.ai.deepseek.chat.options.model", "deepseek-v4-flash");
-
-    @DynamicPropertySource
-    static void deepSeekProperties(DynamicPropertyRegistry registry) {
-        registry.add("spring.ai.deepseek.base-url", () -> BASE_URL);
-        registry.add("spring.ai.deepseek.api-key", () -> API_KEY);
-        registry.add("spring.ai.deepseek.chat.options.model", () -> MODEL);
-        registry.add("spring.ai.deepseek.chat.options.temperature", () -> 0);
-    }
-
-    @BeforeAll
-    static void requireConfiguredApiKey() {
-        Assumptions.assumeTrue(!API_KEY.isBlank(),
-                "请在 application.yml 或 PRIVATE_BANK_DEEPSEEK_API_KEY 中配置 DeepSeek API Key");
-    }
-
-    @org.springframework.beans.factory.annotation.Autowired
-    private KycAnalysisGenerator analysisGenerator;
-
-    @org.springframework.beans.factory.annotation.Autowired
-    private ObjectMapper objectMapper;
+    private static final String API_KEY = configuredProperty("private-bank.agent-runtime.deepseek.api-key", "");
+    private static final String BASE_URL = configuredProperty(
+            "private-bank.agent-runtime.deepseek.base-url", "https://api.deepseek.com/v1");
+    private static final String MODEL = configuredProperty(
+            "private-bank.agent-runtime.deepseek.model", "deepseek-v4-flash");
 
     @Test
     void generatesAContractCompliantKycAnalysisFromMaskedInput() throws Exception {
+        Assumptions.assumeTrue(!API_KEY.isBlank(), "请配置 PRIVATE_BANK_DEEPSEEK_API_KEY");
+        ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+        AgentScopeProperties properties = new AgentScopeProperties(
+                new AgentScopeProperties.DeepSeek(BASE_URL, API_KEY, MODEL, 0D), 2, 4, 2);
+        Model model = new AgentScopeConfiguration().privateBankAgentModel(properties);
+        AgentScopeExecutionEngine engine = new AgentScopeExecutionEngine(
+                model, properties, new AgentRuntimeContextFactory(), ignored -> { });
+        KycAgentExecutor executor = new KycAgentExecutor(
+                engine, new KycOutputValidator(objectMapper), objectMapper, properties);
         KycMaskedInput input = new KycMaskedInput(
                 Map.of(
                         "contractVersion", "kyc-input.v1",
                         "person", Map.of("customer", Map.of("personType", "ENTREPRENEUR", "riskLevel", "MEDIUM"),
-                                "financialFacts", java.util.List.of(Map.of("factCategory", "ASSET", "amount", 1000000,
+                                "financialFacts", List.of(Map.of("factCategory", "ASSET", "amount", 1000000,
                                         "currencyCode", "CNY", "sourceRef", "SRC-1"))),
-                        "enterprise", Map.of("relations", java.util.List.of(Map.of("relationType", "CONTROLLER",
+                        "enterprise", Map.of("relations", List.of(Map.of("relationType", "CONTROLLER",
                                 "industryName", "MANUFACTURING", "sourceRef", "SRC-2"))),
-                        "family", Map.of("members", java.util.List.of()),
-                        "social", Map.of("relations", java.util.List.of())),
+                        "family", Map.of("members", List.of()),
+                        "social", Map.of("relations", List.of())),
                 Map.of("SRC-1", 1001L, "SRC-2", 1002L),
                 Set.of("张三", "测试企业"),
                 "0".repeat(64));
 
-        KycGenerationResult result = analysisGenerator.generate(input);
-        JsonNode analysis = objectMapper.readTree(result.analysisJson());
+        AgentExecutionResult<KycStructuredResult> result = executor.execute(new AgentExecutionRequest<>(
+                "WF-LIVE", "EXE-LIVE", AgentType.CUSTOMER_INSIGHT, "LIVE-TEST", input, Map.of()));
 
-        System.out.printf("%n[KYC live test] maskedInput=%s%n[KYC live test] modelOutput=%s%n",
-                objectMapper.writeValueAsString(input.payload()), result.analysisJson());
-
+        String analysis = objectMapper.writeValueAsString(result.output());
         assertThat(result.modelName()).isEqualTo(MODEL);
-        assertThat(result.attempts()).isBetween(1, 3);
-        assertThat(analysis.fieldNames()).toIterable()
-                .containsExactlyInAnyOrder("riskLevel", "summary", "findings", "riskAlerts", "recommendedActions", "dataGaps");
-        assertThat(analysis.toString()).doesNotContain("张三", "测试企业", "1001", "1002");
-    }
-
-    @Configuration(proxyBeanMethods = false)
-    @ImportAutoConfiguration({
-            SpringAiRetryAutoConfiguration.class,
-            ToolCallingAutoConfiguration.class,
-            DeepSeekChatAutoConfiguration.class
-    })
-    static class LiveConfiguration {
-
-        @Bean
-        ObjectMapper objectMapper() {
-            return new ObjectMapper().findAndRegisterModules();
-        }
-
-        @Bean
-        KycOutputValidator kycOutputValidator(ObjectMapper objectMapper) {
-            return new KycOutputValidator(objectMapper);
-        }
-
-        @Bean
-        KycModelClient kycModelClient(ChatModel chatModel) {
-            return new SpringAiKycModelClient(chatModel);
-        }
-
-        @Bean
-        KycAnalysisGenerator kycAnalysisGenerator(
-                KycModelClient kycModelClient, KycOutputValidator kycOutputValidator, ObjectMapper objectMapper) {
-            return new KycAnalysisGenerator(kycModelClient, kycOutputValidator, objectMapper);
-        }
+        assertThat(result.attempts()).isBetween(1, 2);
+        assertThat(analysis).doesNotContain("张三", "测试企业", "1001", "1002");
     }
 
     private static String configuredProperty(String name, String fallback) {

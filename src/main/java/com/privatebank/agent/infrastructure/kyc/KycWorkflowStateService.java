@@ -73,7 +73,8 @@ public class KycWorkflowStateService {
         }
         workflow.setUpdatedAt(now);
         requireUpdated(workflowMapper.updateById(workflow), "工作流状态已被并发修改");
-        return Optional.of(new KycExecutionClaim(workflowId, workflow.getPersonId(), executionId));
+        return Optional.of(new KycExecutionClaim(
+                workflowId, workflow.getPersonId(), executionId, workflow.getCreatedBy()));
     }
 
     @Transactional
