@@ -109,12 +109,14 @@ class KycWorkflowExecutionServiceTest {
     }
 
     private String validResult() {
-        return "{\"riskLevel\":\"LOW\",\"summary\":\"ok\",\"findings\":[],\"riskAlerts\":[],\"recommendedActions\":[],\"dataGaps\":[]}";
+        return "{\"riskLevel\":\"LOW\",\"summary\":\"ok\",\"findings\":[],\"riskAlerts\":[],\"recommendedActions\":[],\"dataGaps\":[],\"graphAssessment\":{\"contribution\":\"NOT_AVAILABLE\",\"summary\":\"no graph\",\"evidenceRefs\":[]}}";
     }
 
     private KycStructuredResult structuredResult() {
         return new KycStructuredResult(
-                KycStructuredResult.RiskLevel.LOW, "ok", List.of(), List.of(), List.of(), List.of());
+                KycStructuredResult.RiskLevel.LOW, "ok", List.of(), List.of(), List.of(), List.of(),
+                new KycStructuredResult.GraphAssessment(
+                        KycStructuredResult.GraphContribution.NOT_AVAILABLE, "no graph", List.of()));
     }
 
     private record Fixture(

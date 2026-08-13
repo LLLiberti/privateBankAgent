@@ -22,13 +22,28 @@ import java.util.regex.Pattern;
 
 /**
  * Builds the only customer-data object permitted to cross the KYC model boundary.
- * Raw records remain process-local: free text becomes controlled semantic codes and
- * all people, enterprises and organizations become stable runtime aliases.
+ * Raw records remain process-local. Direct identifiers become stable runtime aliases,
+ * precise contact/location data is removed, and non-identifying business semantics are
+ * retained so new record types do not silently disappear at the model boundary.
  */
 @Service
 public class KycDataMaskingService {
 
     private static final Pattern CONTROLLED_CODE = Pattern.compile("[A-Z][A-Z0-9_]{0,79}");
+    private static final Pattern EMAIL = Pattern.compile("(?i)\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b");
+    private static final Pattern PHONE = Pattern.compile("(?<!\\d)(?:\\+?86[- ]?)?1[3-9]\\d{9}(?!\\d)");
+    private static final Pattern ID_NUMBER = Pattern.compile("(?<![0-9A-Z])\\d{17}[0-9Xx](?![0-9A-Z])");
+    private static final Pattern BANK_ACCOUNT = Pattern.compile("(?<!\\d)\\d{16,19}(?!\\d)");
+    private static final Pattern PRECISE_ADDRESS = Pattern.compile(
+            ".*(?:[\\p{IsHan}]{2,12}(?:路|街|巷|弄)\\d*号?|\\d+号|栋|幢|单元|室|大厦|小区|公寓).*");
+    private static final Pattern ORGANIZATION_IN_TEXT = Pattern.compile(
+            "[\\p{IsHan}A-Za-z0-9·&（）()_-]{2,40}(?:股份有限公司|有限公司|公司|大学|学院|学校|银行|基金会|协会|委员会|研究院|实验室)");
+    private static final Set<String> DIRECT_IDENTIFIER_KEYS = Set.of(
+            "fullname", "displayname", "membername", "protectedalias", "enterprisename",
+            "organizationname", "counterpartname", "activityname", "partnername", "publishername",
+            "stockcode", "email", "phone", "mobile", "idnumber", "accountnumber", "bankaccount");
+    private static final Set<String> METADATA_KEYS = Set.of(
+            "createdat", "updatedat", "createtime", "updatetime", "personid", "customerid", "sourceid");
 
     private final ObjectMapper objectMapper;
     private final KycSemanticProjectionService semanticProjectionService;
@@ -53,10 +68,11 @@ public class KycDataMaskingService {
 
     public KycMaskedInput mask(KycCustomerData data, KycRuntimeSupplement supplement) {
         MaskingContext context = new MaskingContext();
+        registerAliases(data, context);
         collectProhibitedTerms(data, context.prohibitedTerms);
 
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("contractVersion", "kyc-input.v3");
+        payload.put("contractVersion", "kyc-input.v4");
         payload.put("person", person(data, context));
         payload.put("enterprise", enterprise(data, context));
         payload.put("family", family(data, context));
@@ -81,8 +97,9 @@ public class KycDataMaskingService {
         person.put("profile", profile(data.profile(), context));
         person.put("careers", careers(data.careers(), context));
         person.put("riskPreferences", records(data.riskPreferences(), context,
-                Field.code("riskLevel"), Field.number("maxDrawdown"), Field.code("investmentHorizon"),
-                Field.code("liquidityRequirement"), Field.code("verificationStatus")));
+                Field.code("riskLevel"), Field.number("maxDrawdown"), Field.text("investmentHorizon"),
+                Field.text("liquidityRequirement"), Field.text("actualPreference"),
+                Field.code("verificationStatus")));
         person.put("financialFacts", financialFacts(data.financialFacts(), context));
         person.put("holdings", holdings(data.holdings(), context));
         person.put("financialEvents", records(data.financialEvents(), context,
@@ -341,16 +358,21 @@ public class KycDataMaskingService {
         }).toList();
     }
 
-    private List<Map<String, Object>> relationshipGraph(
+    private Map<String, Object> relationshipGraph(
             List<KycGraphRelationship> relationships, MaskingContext context) {
         if (relationships == null || relationships.isEmpty()) {
-            return List.of();
+            return Map.of(
+                    "available", false,
+                    "relationshipCount", 0,
+                    "evidenceRefs", List.of(),
+                    "relationships", List.of());
         }
-        return relationships.stream().map(relationship -> {
+        List<Map<String, Object>> projected = relationships.stream().map(relationship -> {
             Map<String, Object> masked = new LinkedHashMap<>();
             if (relationship.sourceId() != null) {
                 masked.put("sourceRef", context.sourceReference(relationship.sourceId()));
             }
+            masked.put("evidenceOrigin", "NEO4J_RELATIONSHIP");
             putAlias(masked, "startAlias", context.graphAlias(
                     relationship.startNodeType(), relationship.startNodeId(), relationship.startIsCustomer()));
             putControlled(masked, "startType", relationship.startNodeType());
@@ -361,8 +383,22 @@ public class KycDataMaskingService {
             putControlled(masked, "verificationStatus", relationship.verificationStatus());
             putNumber(masked, "confidence", relationship.confidence());
             putNumber(masked, "distance", relationship.distance());
+            masked.put("pathScope", relationship.distance() > 1
+                    ? "TWO_HOP" : "DIRECT");
             return masked;
         }).toList();
+        List<String> evidenceRefs = projected.stream()
+                .map(item -> item.get("sourceRef"))
+                .filter(String.class::isInstance)
+                .map(String.class::cast)
+                .distinct()
+                .toList();
+        Map<String, Object> graph = new LinkedHashMap<>();
+        graph.put("available", true);
+        graph.put("relationshipCount", projected.size());
+        graph.put("evidenceRefs", evidenceRefs);
+        graph.put("relationships", projected);
+        return graph;
     }
 
     private List<Map<String, Object>> records(
@@ -387,20 +423,161 @@ public class KycDataMaskingService {
         if (sourceId != null) {
             masked.put("sourceRef", context.sourceReference(sourceId));
         }
+        Map<String, Object> attributes = safeBusinessAttributes(source, context);
+        if (!attributes.isEmpty()) {
+            masked.put("businessAttributes", attributes);
+        }
         return masked;
+    }
+
+    private Map<String, Object> safeBusinessAttributes(Map<String, Object> source, MaskingContext context) {
+        Map<String, Object> attributes = new LinkedHashMap<>();
+        if (source == null) {
+            return attributes;
+        }
+        for (Map.Entry<String, Object> entry : source.entrySet()) {
+            String normalizedKey = normalize(entry.getKey());
+            if (DIRECT_IDENTIFIER_KEYS.contains(normalizedKey) || METADATA_KEYS.contains(normalizedKey)
+                    || normalizedKey.endsWith("id")) {
+                continue;
+            }
+            Object safe = safeValue(entry.getValue(), entry.getKey(), context, 0);
+            if (safe != null) {
+                attributes.put(entry.getKey(), safe);
+            }
+        }
+        return attributes;
+    }
+
+    private Object safeValue(Object raw, String fieldName, MaskingContext context, int depth) {
+        if (raw == null || depth > 4) {
+            return null;
+        }
+        if (raw instanceof Number || raw instanceof Boolean || raw instanceof TemporalAccessor || raw instanceof Date) {
+            return raw;
+        }
+        if (raw instanceof String text) {
+            String normalizedField = normalize(fieldName);
+            if (DIRECT_IDENTIFIER_KEYS.contains(normalizedField)) {
+                return null;
+            }
+            if (normalizedField.contains("address") || normalizedField.contains("headquarters")) {
+                return coarseLocation(text);
+            }
+            String sanitized = context.redact(text);
+            sanitized = EMAIL.matcher(sanitized).replaceAll("[EMAIL_REDACTED]");
+            sanitized = PHONE.matcher(sanitized).replaceAll("[PHONE_REDACTED]");
+            sanitized = ID_NUMBER.matcher(sanitized).replaceAll("[ID_REDACTED]");
+            sanitized = BANK_ACCOUNT.matcher(sanitized).replaceAll("[ACCOUNT_REDACTED]");
+            sanitized = ORGANIZATION_IN_TEXT.matcher(sanitized).replaceAll("O-REDACTED");
+            if (PRECISE_ADDRESS.matcher(sanitized).matches()) {
+                sanitized = coarseLocation(sanitized);
+            }
+            sanitized = sanitized.trim();
+            return sanitized.isEmpty() ? null : sanitized.substring(0, Math.min(600, sanitized.length()));
+        }
+        if (raw instanceof Map<?, ?> map) {
+            Map<String, Object> nested = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                if (entry.getKey() instanceof String key) {
+                    Object safe = safeValue(entry.getValue(), key, context, depth + 1);
+                    if (safe != null) {
+                        nested.put(key, safe);
+                    }
+                }
+            }
+            return nested.isEmpty() ? null : nested;
+        }
+        if (raw instanceof Iterable<?> iterable) {
+            List<Object> nested = new java.util.ArrayList<>();
+            for (Object item : iterable) {
+                Object safe = safeValue(item, fieldName, context, depth + 1);
+                if (safe != null && nested.size() < 100) {
+                    nested.add(safe);
+                }
+            }
+            return nested.isEmpty() ? null : nested;
+        }
+        return null;
+    }
+
+    private String coarseLocation(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        java.util.regex.Matcher city = Pattern.compile("([\\p{IsHan}]{2,12}市)").matcher(raw);
+        if (city.find()) {
+            return city.group(1);
+        }
+        java.util.regex.Matcher province = Pattern.compile("([\\p{IsHan}]{2,12}(?:省|自治区|特别行政区))").matcher(raw);
+        if (province.find()) {
+            return province.group(1);
+        }
+        return PRECISE_ADDRESS.matcher(raw).matches() ? "LOCATION_REDACTED" : raw;
     }
 
     private void collectProhibitedTerms(KycCustomerData data, Set<String> terms) {
         addTerm(terms, data.summary().fullName());
         addTerm(terms, data.summary().displayName());
-        collectTerms(data.profile(), terms, "email", "phone", "mobile", "address", "idNumber", "birthPlace", "nativePlace", "residence");
+        collectTerms(data.profile(), terms, "email", "phone", "mobile", "address", "idNumber");
         collectTerms(data.careers(), terms, "organizationName");
         collectTerms(data.enterpriseRelations(), terms, "enterpriseName", "stockCode", "headquarters");
         collectTerms(data.familyMembers(), terms, "memberName", "protectedAlias");
         collectTerms(data.socialRelations(), terms, "organizationName");
         collectTerms(data.socialActivities(), terms, "activityName", "partnerName");
-        collectTerms(data.publicReputations(), terms, "title", "publisherName");
+        collectTerms(data.publicReputations(), terms, "publisherName");
         collectTerms(data.enterpriseMarketRelations(), terms, "counterpartName");
+    }
+
+    private void registerAliases(KycCustomerData data, MaskingContext context) {
+        context.registerEntity(data.summary().fullName(), "P-1", false);
+        context.registerEntity(data.summary().displayName(), "P-1", false);
+        registerRecordAliases(data.enterpriseRelations(), context, AliasKind.ENTERPRISE);
+        registerRecordAliases(data.careers(), context, AliasKind.ORGANIZATION);
+        registerRecordAliases(data.enterpriseMarketRelations(), context, AliasKind.COUNTERPARTY);
+        registerRecordAliases(data.familyMembers(), context, AliasKind.FAMILY);
+        registerRecordAliases(data.socialRelations(), context, AliasKind.ORGANIZATION);
+        registerRecordAliases(data.socialActivities(), context, AliasKind.ACTIVITY_PARTY);
+        registerRecordAliases(data.publicReputations(), context, AliasKind.PUBLISHER);
+    }
+
+    private void registerRecordAliases(
+            List<Map<String, Object>> records, MaskingContext context, AliasKind kind) {
+        if (records == null) {
+            return;
+        }
+        for (Map<String, Object> record : records) {
+            switch (kind) {
+                case ENTERPRISE -> {
+                    String alias = context.enterpriseAlias(record);
+                    context.registerEntity(stringValue(value(record, "enterpriseName")), alias, true);
+                    context.registerEntity(stringValue(value(record, "stockCode")), alias, false);
+                }
+                case FAMILY -> {
+                    String alias = context.familyAlias(record);
+                    context.registerEntity(stringValue(value(record, "memberName")), alias, false);
+                    context.registerEntity(stringValue(value(record, "protectedAlias")), alias, false);
+                }
+                case COUNTERPARTY -> context.registerEntity(
+                        stringValue(value(record, "counterpartName")), context.counterpartyAlias(record), true);
+                case ORGANIZATION -> context.registerEntity(
+                        stringValue(value(record, "organizationName")), context.organizationAlias(record), true);
+                case ACTIVITY_PARTY -> {
+                    context.registerEntity(stringValue(value(record, "activityName")), context.activityPartyAlias(record), true);
+                    context.registerEntity(stringValue(value(record, "partnerName")), context.activityPartyAlias(record), true);
+                }
+                case PUBLISHER -> context.registerEntity(
+                        stringValue(value(record, "publisherName")), context.publisherAlias(record), true);
+            }
+        }
+    }
+
+    private String stringValue(Object value) {
+        return value instanceof String text ? text : null;
+    }
+
+    private enum AliasKind {
+        ENTERPRISE, FAMILY, COUNTERPARTY, ORGANIZATION, ACTIVITY_PARTY, PUBLISHER
     }
 
     private void collectTerms(Map<String, Object> record, Set<String> terms, String... keys) {
@@ -542,12 +719,17 @@ public class KycDataMaskingService {
             return new Field(name, Type.CURRENCY, name);
         }
 
+        private static Field text(String name) {
+            return new Field(name, Type.TEXT, name);
+        }
+
         private void add(Map<String, Object> target, Object raw) {
             switch (type) {
                 case CODE -> putCode(target, name, raw);
                 case NUMBER -> putNumberValue(target, name, raw);
                 case DATE -> putDateValue(target, name, raw);
                 case CURRENCY -> putCurrencyValue(target, name, raw);
+                case TEXT -> putTextValue(target, name, raw);
             }
         }
 
@@ -576,10 +758,16 @@ public class KycDataMaskingService {
                 target.put(key, text);
             }
         }
+
+        private static void putTextValue(Map<String, Object> target, String key, Object raw) {
+            if (raw instanceof String text && !text.isBlank() && text.length() <= 80) {
+                target.put(key, text.trim());
+            }
+        }
     }
 
     private enum Type {
-        CODE, NUMBER, DATE, CURRENCY
+        CODE, NUMBER, DATE, CURRENCY, TEXT
     }
 
     private static final class MaskingContext {
@@ -594,6 +782,7 @@ public class KycDataMaskingService {
         private final Map<String, String> eventAliases = new LinkedHashMap<>();
         private final Map<String, String> marketSegmentAliases = new LinkedHashMap<>();
         private final Map<String, String> otherGraphAliases = new LinkedHashMap<>();
+        private final Map<String, String> redactions = new LinkedHashMap<>();
 
         private MaskingContext() {
             graphPersonAliases.put("CUSTOMER", "P-1");
@@ -621,6 +810,49 @@ public class KycDataMaskingService {
 
         private String counterpartyAlias(Map<String, Object> record) {
             return alias(counterpartAliases, "C", entityKey(record, "counterpartId", "counterpartName"));
+        }
+
+        private String activityPartyAlias(Map<String, Object> record) {
+            return alias(organizationAliases, "O", entityKey(record, "activityName", "partnerName"));
+        }
+
+        private String publisherAlias(Map<String, Object> record) {
+            return alias(organizationAliases, "O", entityKey(record, "publisherName"));
+        }
+
+        private void registerEntity(String raw, String alias, boolean organization) {
+            if (raw == null || raw.isBlank() || alias == null) {
+                return;
+            }
+            addRedaction(raw.trim(), alias);
+            String withoutParentheses = raw.replaceAll("[（(].*?[）)]", "").trim();
+            addRedaction(withoutParentheses, alias);
+            if (organization) {
+                String shortName = withoutParentheses
+                        .replaceAll("(?:股份)?有限公司$", "")
+                        .replaceAll("控股$", "")
+                        .trim();
+                addRedaction(shortName, alias);
+            }
+        }
+
+        private void addRedaction(String raw, String alias) {
+            if (raw != null && raw.length() >= 2) {
+                redactions.putIfAbsent(raw, alias);
+            }
+        }
+
+        private String redact(String source) {
+            String sanitized = source;
+            List<Map.Entry<String, String>> entries = redactions.entrySet().stream()
+                    .sorted((left, right) -> Integer.compare(right.getKey().length(), left.getKey().length()))
+                    .toList();
+            for (Map.Entry<String, String> entry : entries) {
+                sanitized = Pattern.compile(Pattern.quote(entry.getKey()), Pattern.CASE_INSENSITIVE)
+                        .matcher(sanitized)
+                        .replaceAll(java.util.regex.Matcher.quoteReplacement(entry.getValue()));
+            }
+            return sanitized;
         }
 
         private String graphAlias(String nodeType, String nodeId, boolean customer) {
