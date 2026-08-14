@@ -23,7 +23,7 @@ spring:
     username: ${PRIVATE_BANK_ES_USERNAME:elastic}
     password: ${PRIVATE_BANK_ES_PASSWORD:ICBCSDCIntern@0710}
   neo4j:
-    uri: ${PRIVATE_BANK_NEO4J_URI:http://47.116.18.232:7474/browser/}
+    uri: ${PRIVATE_BANK_NEO4J_URI:bolt://47.116.18.232:7687}
     authentication:
       username: ${PRIVATE_BANK_NEO4J_USERNAME:neo4j}
       password: ${PRIVATE_BANK_NEO4J_PASSWORD:ICBCSDCIntern@0710}
