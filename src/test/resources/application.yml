@@ -12,6 +12,8 @@ mybatis-plus:
 private-bank:
   security:
     jwt:
+  graph:
+    enabled: false
       secret: test-secret-test-secret-test-secret-123456
       issuer: private-bank-test
       ttl-minutes: 120
