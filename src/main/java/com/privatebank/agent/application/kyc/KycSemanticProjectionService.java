@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Converts local free text to a small, documented code vocabulary.  It never
@@ -101,7 +102,7 @@ public final class KycSemanticProjectionService {
                 rule("DIGITAL_PLATFORM", "社交", "平台", "互联网", "online platform"),
                 rule("DIGITAL_CONTENT", "游戏", "内容", "娱乐", "music", "video"),
                 rule("FINTECH_ENTERPRISE_SERVICE", "金融科技", "支付", "企业服务", "fintech"),
-                rule("CLOUD_COMPUTING", "云", "cloud"),
+                rule("CLOUD_COMPUTING", "云计算", "云服务", "云平台", "云业务", "上云", "cloud"),
                 rule("ARTIFICIAL_INTELLIGENCE", "人工智能", "ai", "大模型"),
                 rule("MANUFACTURING", "制造", "工业", "自动化", "manufacturing")));
         rules.put("ENTERPRISE_EVENT", List.of(
@@ -170,7 +171,18 @@ public final class KycSemanticProjectionService {
 
     private record Rule(String code, List<String> keywords) {
         private boolean matches(String text) {
-            return keywords.stream().anyMatch(text::contains);
+            return keywords.stream().anyMatch(keyword -> matchesKeyword(text, keyword));
+        }
+
+        private boolean matchesKeyword(String text, String keyword) {
+            boolean asciiPhrase = keyword.codePoints().allMatch(character -> character < 128);
+            if (!asciiPhrase) {
+                return text.contains(keyword);
+            }
+            return Pattern.compile("(?<![\\p{L}\\p{N}])" + Pattern.quote(keyword)
+                            + "(?![\\p{L}\\p{N}])", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE)
+                    .matcher(text)
+                    .find();
         }
     }
 }

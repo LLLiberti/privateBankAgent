@@ -12,6 +12,7 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -37,8 +38,10 @@ class KycDataMaskingServiceTest {
         KycMaskedInput input = maskingService.mask(data);
         String payload = objectMapper.writeValueAsString(input.payload());
 
-        assertThat(input.payload()).containsEntry("contractVersion", "kyc-input.v4");
+        assertThat(input.payload()).containsEntry("contractVersion", "kyc-input.v5");
+        assertThat(input.payload()).containsKey("dataCompleteness");
         assertThat(input.sha256()).matches("[0-9a-f]{64}");
+        assertThat(input.prohibitedTerms()).contains("腾讯科技", "腾讯");
         assertThat(input.evidenceReferences()).containsKeys("SRC-1", "SRC-2", "SRC-3", "SRC-4", "SRC-5");
 
         Map<String, Object> enterprise = section(input, "enterprise");
@@ -46,6 +49,7 @@ class KycDataMaskingServiceTest {
         assertThat(records(enterprise, "businesses").getFirst())
                 .containsEntry("enterpriseAlias", "E-1")
                 .containsEntry("businessCategories", List.of("CLOUD_COMPUTING", "ARTIFICIAL_INTELLIGENCE"));
+        assertThat(records(enterprise, "businesses")).hasSize(1);
         assertThat(records(enterprise, "events").getFirst())
                 .containsEntry("enterpriseAlias", "E-1")
                 .containsEntry("eventSignals", List.of("SHARE_REPURCHASE", "AI_STRATEGY"));
@@ -54,6 +58,7 @@ class KycDataMaskingServiceTest {
                 .containsEntry("counterpartyAlias", "C-1");
 
         Map<String, Object> person = section(input, "person");
+        assertThat(records(person, "careers").getFirst()).containsEntry("organizationAlias", "E-1");
         assertThat(records(person, "interactionSignals").getFirst())
                 .containsEntry("personAlias", "P-1")
                 .containsEntry("topicCodes", List.of("LONG_TERM_PLANNING", "DIGITAL_TECHNOLOGY", "PHILANTHROPY"));
@@ -63,21 +68,28 @@ class KycDataMaskingServiceTest {
         assertThat(records(family, "relations").getFirst()).containsEntry("familyAlias", "F-1");
 
         Map<String, Object> social = section(input, "social");
-        assertThat(records(social, "relations").getFirst()).containsEntry("organizationAlias", "O-2");
+        assertThat(records(social, "relations").getFirst()).containsEntry("organizationAlias", "O-1");
         assertThat(records(social, "activities").getFirst())
+                .containsEntry("activityName", "99公益日发起人")
                 .containsEntry("activitySignals", List.of("PHILANTHROPY", "EDUCATION_SUPPORT"));
         assertThat(records(social, "reputationRisks").getFirst())
                 .containsEntry("riskCategories", List.of("ANTITRUST", "DATA_SECURITY"));
 
         assertThat(payload).doesNotContain(
-                "马化腾", "腾讯", "某慈善基金会", "某竞争企业", "张三", "13800138000");
+                "马化腾", "腾讯", "某慈善基金会", "某竞争企业", "张三", "13800138000",
+                "010-12345678", "110105491231002");
         assertThat(payload).contains(
-                "长期关注人工智能和公益", "云与人工智能业务", "实施股权回购并加大人工智能投入",
-                "涉及反垄断和数据安全的监管关注", "原始备注");
+                "长期关注人工智能和公益", "面向企业提供云计算和人工智能服务", "实施股权回购并加大人工智能投入",
+                "反垄断与数据安全", "原始备注", "LONG_TERM", "BALANCED",
+                "[PHONE_REDACTED]", "[ID_REDACTED]");
         assertThat(payload).doesNotContain(
                 "fullName", "enterpriseName", "organizationName",
-                "birth_date", "native_place", "birth_place", "residence", "school_name",
-                "1971-10-29", "深圳", "广东", "某大学");
+                "birth_date", "native_place", "birth_place", "school_name",
+                "1971-10-29", "某大学");
+        assertThat(payload).contains("深圳市", "广东省");
+
+        assertThatThrownBy(() -> section(input, "person").put("unsafe", "value"))
+                .isInstanceOf(UnsupportedOperationException.class);
     }
 
     @Test
@@ -94,7 +106,9 @@ class KycDataMaskingServiceTest {
                         new KycGraphRelationship("PERSON:1", "PERSON", true, "CONTROLS",
                                 "ENTERPRISE:501", "ENTERPRISE", false, 501L, "VERIFIED", 0.99, 1),
                         new KycGraphRelationship("ENTERPRISE:501", "ENTERPRISE", false, "HAS_EVENT",
-                                "EVENT:9001", "EVENT", false, 502L, "VERIFIED", 0.90, 2)));
+                                "EVENT:9001", "EVENT", false, 502L, "VERIFIED", 0.90, 2),
+                        new KycGraphRelationship("PERSON:1", "PERSON", true, "FAMILY_OF",
+                                "FAMILY_MEMBER:301", "FAMILYMEMBER", false, 503L, "VERIFIED", 0.95, 1)));
 
         KycMaskedInput input = maskingService.mask(data);
         @SuppressWarnings("unchecked")
@@ -102,12 +116,12 @@ class KycDataMaskingServiceTest {
         List<Map<String, Object>> graph = (List<Map<String, Object>>) graphProjection.get("relationships");
         String payload = objectMapper.writeValueAsString(input.payload());
 
-        assertThat(input.payload()).containsEntry("contractVersion", "kyc-input.v4");
+        assertThat(input.payload()).containsEntry("contractVersion", "kyc-input.v5");
         assertThat(graphProjection)
                 .containsEntry("available", true)
-                .containsEntry("relationshipCount", 2)
+                .containsEntry("relationshipCount", 3)
                 .containsKey("evidenceRefs");
-        assertThat(graph).hasSize(2);
+        assertThat(graph).hasSize(3);
         assertThat(graph.get(0))
                 .containsEntry("startAlias", "P-1")
                 .containsEntry("relationType", "CONTROLS")
@@ -118,13 +132,16 @@ class KycDataMaskingServiceTest {
                 .containsEntry("distance", 2)
                 .containsEntry("pathScope", "TWO_HOP")
                 .containsEntry("evidenceOrigin", "NEO4J_RELATIONSHIP");
+        assertThat(graph.get(2))
+                .containsEntry("startAlias", "P-1")
+                .containsEntry("endAlias", "F-1");
         assertThat(payload).doesNotContain("PERSON:1", "ENTERPRISE:501", "EVENT:9001");
         assertThat(input.evidenceReferences().get(graph.get(0).get("sourceRef"))).isEqualTo(501L);
         assertThat(input.evidenceReferences().get(graph.get(1).get("sourceRef"))).isEqualTo(502L);
     }
 
     @Test
-    void retainsUnknownBusinessFieldsWhileRedactingIdentifiersRecursively() throws Exception {
+    void dropsUnknownBusinessFieldsAndReportsTheOmission() throws Exception {
         KycCustomerData base = sampleData();
         Map<String, Object> unknownRiskRecord = new java.util.LinkedHashMap<>();
         unknownRiskRecord.put("source_id", 777L);
@@ -145,11 +162,11 @@ class KycDataMaskingServiceTest {
 
         String payload = objectMapper.writeValueAsString(maskingService.mask(data).payload());
 
-        assertThat(payload).doesNotContain("raw_text", "must never cross", "nested raw evidence");
-
-        assertThat(payload).contains("5年以上", "中等", "custom_scenario", "allocation_ratio", "长期配置人工智能主题");
-        assertThat(payload).contains("P-1", "[PHONE_REDACTED]", "[SENSITIVE_REDACTED]");
-        assertThat(payload).doesNotContain("马化腾", "13800138000", "深圳市某区");
+        assertThat(payload).doesNotContain(
+                "raw_text", "must never cross", "nested raw evidence", "allocation_ratio",
+                "长期配置人工智能主题", "马化腾", "13800138000", "深圳市某区");
+        assertThat(payload).contains(
+                "LONG_TERM", "MEDIUM", "person.riskPreferences.custom_scenario", "UNMAPPED_FIELD");
     }
 
     @Test
@@ -157,23 +174,53 @@ class KycDataMaskingServiceTest {
         KycInputSafetyValidator validator = new KycInputSafetyValidator();
 
         assertThatThrownBy(() -> validator.validate(
-                Map.of("contractVersion", "kyc-input.v4", "person", Map.of("rawText", "原始备注")), Set.of()))
+                Map.of("contractVersion", "kyc-input.v5", "person", Map.of("rawText", "原始备注")), Set.of()))
                 .isInstanceOf(KycInputValidationException.class)
                 .hasMessageContaining("禁止字段");
-        for (String field : List.of(
-                "birth_date", "native_place", "birth_place", "residence", "school_name")) {
+        for (String field : List.of("birth_date", "school_name")) {
             assertThatThrownBy(() -> validator.validate(
-                    Map.of("contractVersion", "kyc-input.v4", "person", Map.of(field, "某值")), Set.of()))
+                    Map.of("contractVersion", "kyc-input.v5", "person", Map.of(field, "某值")), Set.of()))
                     .isInstanceOf(KycInputValidationException.class)
                     .hasMessageContaining("禁止字段");
         }
         assertThatCode(() -> validator.validate(
-                Map.of("contractVersion", "kyc-input.v4", "person", Map.of("signal", "原始备注")), Set.of()))
+                Map.of("contractVersion", "kyc-input.v5", "person", Map.of("nativePlace", "深圳市")), Set.of()))
                 .doesNotThrowAnyException();
         assertThatThrownBy(() -> validator.validate(
-                Map.of("contractVersion", "kyc-input.v4", "person", Map.of("signal", "联系13800138000")), Set.of()))
+                Map.of("contractVersion", "kyc-input.v5", "person", Map.of("signal", "联系010-12345678")), Set.of()))
                 .isInstanceOf(KycInputValidationException.class)
-                .hasMessageContaining("格式化敏感信息");
+                .hasMessageContaining("直接标识信息");
+        assertThatThrownBy(() -> validator.validate(
+                Map.of("contractVersion", "kyc-input.v5", "person", Map.of("signal", "旧证件110105491231002")), Set.of()))
+                .isInstanceOf(KycInputValidationException.class)
+                .hasMessageContaining("直接标识信息");
+    }
+
+    @Test
+    void capsLargeMysqlSectionsAndReportsTruncation() {
+        KycCustomerData base = sampleData();
+        List<Map<String, Object>> holdings = IntStream.rangeClosed(1, 201)
+                .mapToObj(index -> Map.<String, Object>of(
+                        "product_type", "私募基金",
+                        "amount", index,
+                        "currency_code", "CNY",
+                        "source_id", 10_000L + index))
+                .toList();
+        KycCustomerData data = new KycCustomerData(
+                base.summary(), base.profile(), base.careers(), base.riskPreferences(), base.financialFacts(),
+                holdings, base.financialEvents(), base.serviceRecords(), base.interactionNotes(),
+                base.enterpriseRelations(), base.enterpriseBusinesses(), base.enterpriseFinancialMetrics(),
+                base.enterpriseEvents(), base.enterpriseMarketRelations(), base.familyMembers(),
+                base.familyRelations(), base.successionArrangements(), base.socialRelations(),
+                base.socialActivities(), base.publicReputations(), base.reputationRisks(), base.graphRelationships());
+
+        KycMaskedInput input = maskingService.mask(data);
+        Map<String, Object> person = section(input, "person");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> completeness = (Map<String, Object>) input.payload().get("dataCompleteness");
+
+        assertThat(records(person, "holdings")).hasSize(200);
+        assertThat((List<String>) completeness.get("truncatedSections")).contains("person.holdings");
     }
 
     @SuppressWarnings("unchecked")
@@ -195,15 +242,20 @@ class KycDataMaskingServiceTest {
                         Map.entry("residence", "深圳市某区"), Map.entry("school_name", "某大学"),
                         Map.entry("source_id", 101L)),
                 List.of(Map.ofEntries(
-                        Map.entry("organization_name", "腾讯科技"), Map.entry("position_title", "董事会主席"),
+                        Map.entry("organization_name", "腾讯"), Map.entry("position_title", "董事会主席"),
                         Map.entry("start_date", "1998-11-01"), Map.entry("source_id", 102L),
                         Map.entry("verification_status", "VERIFIED"))),
                 List.of(Map.ofEntries(Map.entry("risk_level", "MEDIUM"), Map.entry("max_drawdown", 0.15),
+                        Map.entry("investment_horizon", "5年以上"), Map.entry("liquidity_requirement", "中等"),
+                        Map.entry("actual_preference", "均衡配置"),
+                        Map.entry("preference_description", "偏好长期均衡配置，座机010-12345678，旧证110105491231002"),
                         Map.entry("source_id", 103L), Map.entry("verification_status", "VERIFIED"))),
                 List.of(Map.ofEntries(Map.entry("fact_category", "ASSET"), Map.entry("asset_type", "股权投资"),
-                        Map.entry("amount", 1000000), Map.entry("currency_code", "CNY"), Map.entry("source_id", 104L))),
+                        Map.entry("amount", 1000000), Map.entry("currency_code", "CNY"),
+                        Map.entry("description", "主要为长期股权投资"), Map.entry("source_id", 104L))),
                 List.of(Map.ofEntries(Map.entry("product_type", "私募基金"), Map.entry("amount", 200000),
-                        Map.entry("currency_code", "CNY"), Map.entry("source_id", 105L))),
+                        Map.entry("currency_code", "CNY"), Map.entry("holding_description", "长期持有"),
+                        Map.entry("source_id", 105L))),
                 List.of(),
                 List.of(),
                 List.of(Map.ofEntries(Map.entry("note_type", "PREFERENCE"),
@@ -213,8 +265,11 @@ class KycDataMaskingServiceTest {
                         Map.entry("title", "董事会主席"), Map.entry("relation_type", "CONTROLLER"),
                         Map.entry("industry_name", "互联网科技"), Map.entry("headquarters", "深圳市"),
                         Map.entry("source_id", 201L))),
-                List.of(Map.ofEntries(Map.entry("enterprise_id", 501L), Map.entry("business_line", "云与人工智能业务"),
-                        Map.entry("business_description", "面向企业提供云计算和人工智能服务"), Map.entry("source_id", 202L))),
+                List.of(
+                        Map.ofEntries(Map.entry("enterprise_id", 501L), Map.entry("business_line", "云与人工智能业务"),
+                                Map.entry("business_description", "面向企业提供云计算和人工智能服务"), Map.entry("source_id", 202L)),
+                        Map.ofEntries(Map.entry("enterprise_id", 501L), Map.entry("business_line", "云与人工智能业务"),
+                                Map.entry("business_description", "面向企业提供云计算和人工智能服务"), Map.entry("source_id", 202L))),
                 List.of(Map.ofEntries(Map.entry("enterprise_id", 501L), Map.entry("reporting_period", "2025"),
                         Map.entry("metric_name", "REVENUE"), Map.entry("metric_value", 1000),
                         Map.entry("unit_name", "CNY_100M"), Map.entry("source_id", 203L))),
@@ -224,15 +279,18 @@ class KycDataMaskingServiceTest {
                 List.of(Map.ofEntries(Map.entry("enterprise_id", 501L), Map.entry("counterpart_name", "某竞争企业"),
                         Map.entry("relation_type", "COMPETITOR"), Map.entry("source_id", 205L))),
                 List.of(Map.ofEntries(Map.entry("family_member_id", 301L), Map.entry("member_name", "张三"),
+                        Map.entry("member_description", "配偶张三参与家族公益"),
                         Map.entry("public_disclosure_level", "RESTRICTED"), Map.entry("source_id", 301L))),
                 List.of(Map.ofEntries(Map.entry("family_member_id", 301L), Map.entry("relation_type", "SPOUSE"),
                         Map.entry("public_disclosure_level", "RESTRICTED"), Map.entry("source_id", 302L))),
                 List.of(Map.ofEntries(Map.entry("enterprise_id", 501L), Map.entry("arrangement_status", "DRAFT"),
-                        Map.entry("governance_model", "家族信托与董事会治理"), Map.entry("source_id", 303L))),
+                        Map.entry("governance_model", "家族信托与董事会治理"),
+                        Map.entry("arrangement_description", "通过家族信托逐步安排传承"), Map.entry("source_id", 303L))),
                 List.of(Map.ofEntries(Map.entry("social_organization_id", 601L), Map.entry("organization_name", "某慈善基金会"),
                         Map.entry("organization_type", "FOUNDATION"), Map.entry("relation_type", "BOARD_MEMBER"),
                         Map.entry("role_title", "理事"), Map.entry("source_id", 401L))),
-                List.of(Map.ofEntries(Map.entry("activity_type", "DONATION"), Map.entry("activity_description", "支持教育公益项目"),
+                List.of(Map.ofEntries(Map.entry("activity_type", "DONATION"), Map.entry("activity_name", "99公益日发起人"),
+                        Map.entry("activity_description", "支持教育公益项目"),
                         Map.entry("amount", 10), Map.entry("currency_code", "CNY"), Map.entry("source_id", 402L))),
                 List.of(Map.ofEntries(Map.entry("reputation_type", "MEDIA"), Map.entry("title", "全球科技企业家"),
                         Map.entry("description", "具有全球影响力"), Map.entry("source_id", 403L))),
