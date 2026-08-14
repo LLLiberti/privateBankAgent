@@ -12,6 +12,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.util.LinkedHashMap;
@@ -34,7 +35,8 @@ public class GlobalExceptionHandler {
         return error(HttpStatus.BAD_REQUEST, ErrorCode.INVALID_ARGUMENT, "请求参数校验失败", details);
     }
 
-    @ExceptionHandler({ConstraintViolationException.class, MissingRequestHeaderException.class})
+    @ExceptionHandler({ConstraintViolationException.class, MissingRequestHeaderException.class,
+            MethodArgumentTypeMismatchException.class})
     ResponseEntity<ApiError> handleConstraint(Exception exception) {
         return error(HttpStatus.BAD_REQUEST, ErrorCode.INVALID_ARGUMENT, exception.getMessage(), Map.of());
     }
