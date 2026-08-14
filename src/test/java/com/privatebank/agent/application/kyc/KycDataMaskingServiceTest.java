@@ -74,7 +74,10 @@ class KycDataMaskingServiceTest {
         assertThat(payload).contains(
                 "长期关注人工智能和公益", "云与人工智能业务", "实施股权回购并加大人工智能投入",
                 "涉及反垄断和数据安全的监管关注", "原始备注");
-        assertThat(payload).doesNotContain("fullName", "enterpriseName", "organizationName");
+        assertThat(payload).doesNotContain(
+                "fullName", "enterpriseName", "organizationName",
+                "birth_date", "native_place", "birth_place", "residence", "school_name",
+                "1971-10-29", "深圳", "广东", "某大学");
     }
 
     @Test
@@ -129,7 +132,7 @@ class KycDataMaskingServiceTest {
         unknownRiskRecord.put("investment_horizon", "5年以上");
         unknownRiskRecord.put("liquidity_requirement", "中等");
         unknownRiskRecord.put("custom_scenario", Map.of(
-                "comment", "马化腾计划联系13800138000并长期配置人工智能主题",
+                "comment", "马化腾计划联系13800138000，在深圳市某区长期配置人工智能主题",
                 "allocation_ratio", 45,
                 "raw_text", "nested raw evidence must also be removed"));
         KycCustomerData data = new KycCustomerData(
@@ -145,8 +148,8 @@ class KycDataMaskingServiceTest {
         assertThat(payload).doesNotContain("raw_text", "must never cross", "nested raw evidence");
 
         assertThat(payload).contains("5年以上", "中等", "custom_scenario", "allocation_ratio", "长期配置人工智能主题");
-        assertThat(payload).contains("P-1", "[PHONE_REDACTED]");
-        assertThat(payload).doesNotContain("马化腾", "13800138000");
+        assertThat(payload).contains("P-1", "[PHONE_REDACTED]", "[SENSITIVE_REDACTED]");
+        assertThat(payload).doesNotContain("马化腾", "13800138000", "深圳市某区");
     }
 
     @Test
@@ -157,6 +160,13 @@ class KycDataMaskingServiceTest {
                 Map.of("contractVersion", "kyc-input.v4", "person", Map.of("rawText", "原始备注")), Set.of()))
                 .isInstanceOf(KycInputValidationException.class)
                 .hasMessageContaining("禁止字段");
+        for (String field : List.of(
+                "birth_date", "native_place", "birth_place", "residence", "school_name")) {
+            assertThatThrownBy(() -> validator.validate(
+                    Map.of("contractVersion", "kyc-input.v4", "person", Map.of(field, "某值")), Set.of()))
+                    .isInstanceOf(KycInputValidationException.class)
+                    .hasMessageContaining("禁止字段");
+        }
         assertThatCode(() -> validator.validate(
                 Map.of("contractVersion", "kyc-input.v4", "person", Map.of("signal", "原始备注")), Set.of()))
                 .doesNotThrowAnyException();
@@ -179,7 +189,11 @@ class KycDataMaskingServiceTest {
     private KycCustomerData sampleData() {
         return new KycCustomerData(
                 new CustomerSummaryResponse(1L, "马化腾", "Pony", "ENTREPRENEUR", "VERIFIED", "MEDIUM"),
-                Map.ofEntries(Map.entry("birth_year", 1971), Map.entry("native_place", "深圳"), Map.entry("source_id", 101L)),
+                Map.ofEntries(
+                        Map.entry("birth_date", "1971-10-29"), Map.entry("birth_year", 1971),
+                        Map.entry("native_place", "深圳"), Map.entry("birth_place", "广东"),
+                        Map.entry("residence", "深圳市某区"), Map.entry("school_name", "某大学"),
+                        Map.entry("source_id", 101L)),
                 List.of(Map.ofEntries(
                         Map.entry("organization_name", "腾讯科技"), Map.entry("position_title", "董事会主席"),
                         Map.entry("start_date", "1998-11-01"), Map.entry("source_id", 102L),
@@ -197,7 +211,8 @@ class KycDataMaskingServiceTest {
                         Map.entry("is_explicit_expression", true), Map.entry("source_id", 106L))),
                 List.of(Map.ofEntries(Map.entry("enterprise_id", 501L), Map.entry("enterprise_name", "腾讯科技"),
                         Map.entry("title", "董事会主席"), Map.entry("relation_type", "CONTROLLER"),
-                        Map.entry("industry_name", "互联网科技"), Map.entry("source_id", 201L))),
+                        Map.entry("industry_name", "互联网科技"), Map.entry("headquarters", "深圳市"),
+                        Map.entry("source_id", 201L))),
                 List.of(Map.ofEntries(Map.entry("enterprise_id", 501L), Map.entry("business_line", "云与人工智能业务"),
                         Map.entry("business_description", "面向企业提供云计算和人工智能服务"), Map.entry("source_id", 202L))),
                 List.of(Map.ofEntries(Map.entry("enterprise_id", 501L), Map.entry("reporting_period", "2025"),

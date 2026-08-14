@@ -18,8 +18,8 @@ public final class KycInputSafetyValidator {
     private static final Set<String> DIRECT_IDENTIFIER_KEYS = Set.of(
             "fullname", "displayname", "membername", "protectedalias", "enterprisename",
             "organizationname", "counterpartname", "activityname", "partnername", "publishername",
-            "stockcode", "school", "email", "phone", "mobile", "idnumber", "accountnumber",
-            "bankaccount", "rawtext");
+            "stockcode", "school", "schoolname", "email", "phone", "mobile", "idnumber", "accountnumber",
+            "bankaccount", "birthdate", "nativeplace", "birthplace", "residence", "rawtext");
     private static final Pattern EMAIL = Pattern.compile("(?i)\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}\\b");
     private static final Pattern PHONE = Pattern.compile("(?<!\\d)(?:\\+?86[- ]?)?1[3-9]\\d{9}(?!\\d)");
     private static final Pattern ID_NUMBER = Pattern.compile("(?<![0-9A-Z])\\d{17}[0-9Xx](?![0-9A-Z])");
@@ -32,7 +32,7 @@ public final class KycInputSafetyValidator {
     }
 
     @SuppressWarnings("unchecked")
-    private void validateValue(Object value, String fieldName, Set<String> prohibitedTerms) {
+    private void validateValue(Object value, String fieldPath, Set<String> prohibitedTerms) {
         if (value == null || value instanceof Number || value instanceof Boolean
                 || value instanceof TemporalAccessor || value instanceof Date) {
             return;
@@ -43,40 +43,43 @@ public final class KycInputSafetyValidator {
                     throw new KycInputValidationException("KYC 脱敏输入包含非文本字段名");
                 }
                 String normalized = normalize(key);
+                String childPath = fieldPath + "." + key;
                 if (DIRECT_IDENTIFIER_KEYS.contains(normalized)) {
-                    throw new KycInputValidationException("KYC 脱敏输入包含禁止字段: " + key);
+                    throw new KycInputValidationException("KYC 脱敏输入包含禁止字段: " + childPath);
                 }
-                validateValue(entry.getValue(), key, prohibitedTerms,
+                validateValue(entry.getValue(), childPath, prohibitedTerms,
                         normalized.contains("address") || normalized.contains("headquarters"));
             }
             return;
         }
         if (value instanceof Iterable<?> iterable) {
+            int index = 0;
             for (Object item : iterable) {
-                validateValue(item, fieldName, prohibitedTerms, false);
+                validateValue(item, fieldPath + "[" + index + "]", prohibitedTerms, false);
+                index++;
             }
             return;
         }
         if (value instanceof String text) {
-            validateText(text, fieldName, prohibitedTerms, false);
+            validateText(text, fieldPath, prohibitedTerms, false);
             return;
         }
-        throw new KycInputValidationException("KYC 脱敏输入包含不支持的字段类型: " + fieldName);
+        throw new KycInputValidationException("KYC 脱敏输入包含不支持的字段类型: " + fieldPath);
     }
 
     private void validateValue(
-            Object value, String fieldName, Set<String> prohibitedTerms, boolean preciseLocationField) {
+            Object value, String fieldPath, Set<String> prohibitedTerms, boolean preciseLocationField) {
         if (value instanceof String text) {
-            validateText(text, fieldName, prohibitedTerms, preciseLocationField);
+            validateText(text, fieldPath, prohibitedTerms, preciseLocationField);
             return;
         }
-        validateValue(value, fieldName, prohibitedTerms);
+        validateValue(value, fieldPath, prohibitedTerms);
     }
 
     private void validateText(
-            String text, String fieldName, Set<String> prohibitedTerms, boolean preciseLocationField) {
+            String text, String fieldPath, Set<String> prohibitedTerms, boolean preciseLocationField) {
         if (text.isBlank() || text.length() > 600) {
-            throw new KycInputValidationException("KYC 脱敏输入包含非法文本: " + fieldName);
+            throw new KycInputValidationException("KYC 脱敏输入包含非法文本: " + fieldPath);
         }
         String normalized = text.toLowerCase(Locale.ROOT);
         boolean leaked = prohibitedTerms.stream()
@@ -84,12 +87,12 @@ public final class KycInputSafetyValidator {
                 .map(term -> term.trim().toLowerCase(Locale.ROOT))
                 .anyMatch(normalized::contains);
         if (leaked) {
-            throw new KycInputValidationException("KYC 脱敏输入包含原始标识信息: " + fieldName);
+            throw new KycInputValidationException("KYC 脱敏输入包含原始标识信息: " + fieldPath);
         }
         if (EMAIL.matcher(text).find() || PHONE.matcher(text).find() || ID_NUMBER.matcher(text).find()
                 || BANK_ACCOUNT.matcher(text).find()
                 || preciseLocationField && PRECISE_ADDRESS.matcher(text).matches()) {
-            throw new KycInputValidationException("KYC 脱敏输入仍包含格式化敏感信息: " + fieldName);
+            throw new KycInputValidationException("KYC 脱敏输入仍包含格式化敏感信息: " + fieldPath);
         }
     }
 

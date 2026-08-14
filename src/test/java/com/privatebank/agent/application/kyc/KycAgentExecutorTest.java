@@ -64,7 +64,7 @@ class KycAgentExecutorTest {
         assertThat(result.output().summary()).isEqualTo("修复后的结论");
         assertThat(secondPrompt.get()).contains(
                 "未通过证据、脱敏或业务约束校验",
-                "具体失败原因：finding 引用了不存在的证据",
+                "具体失败原因：findings[0].evidenceRefs[0] 不在允许引用集合中",
                 "允许引用的全部证据编号：[SRC-1]",
                 "不得编造证据编号");
     }
@@ -101,7 +101,7 @@ class KycAgentExecutorTest {
         assertThat(captured.get().outputType()).isEqualTo(KycStructuredResult.class);
         assertThat(captured.get().systemPrompt()).contains(
                 "SRC-*", "不得猜测", "dataGaps", "graphAssessment",
-                "managerSupplement.signals", "不是 SRC-* 证据");
+                "managerSupplement.signals", "不是 SRC-* 证据", "evidenceRefs 最多 10 项");
         assertThat(captured.get().userPrompt()).contains("customer", "riskLevel");
     }
 

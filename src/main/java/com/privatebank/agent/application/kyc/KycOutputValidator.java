@@ -138,18 +138,31 @@ public class KycOutputValidator {
         if (!findings.isArray() || findings.size() > 20) {
             throw new KycOutputValidationException("findings 必须是最多 20 项的数组");
         }
-        for (JsonNode finding : findings) {
-            requireObject(finding, "finding 必须是对象");
-            requireExactFields(finding, FINDING_FIELDS, "finding 字段不符合 KYC 合约");
-            requireEnum(finding.path("dimension"), DIMENSIONS, "finding.dimension 无效");
-            requireEnum(finding.path("riskLevel"), RISK_LEVELS, "finding.riskLevel 无效");
-            requireText(finding.path("finding"), 800, "finding.finding 无效");
-            if (!finding.path("evidenceRefs").isArray() || finding.path("evidenceRefs").size() > 10) {
-                throw new KycOutputValidationException("finding.evidenceRefs 无效");
+        for (int findingIndex = 0; findingIndex < findings.size(); findingIndex++) {
+            JsonNode finding = findings.get(findingIndex);
+            String path = "findings[" + findingIndex + "]";
+            requireObject(finding, path + " 必须是对象");
+            requireExactFields(finding, FINDING_FIELDS, path + " 字段不符合 KYC 合约");
+            requireEnum(finding.path("dimension"), DIMENSIONS, path + ".dimension 无效");
+            requireEnum(finding.path("riskLevel"), RISK_LEVELS, path + ".riskLevel 无效");
+            requireText(finding.path("finding"), 800, path + ".finding 无效");
+            JsonNode evidenceRefs = finding.path("evidenceRefs");
+            if (!evidenceRefs.isArray()) {
+                throw new KycOutputValidationException(path + ".evidenceRefs 必须是数组");
             }
-            for (JsonNode evidenceRef : finding.path("evidenceRefs")) {
-                if (!evidenceRef.isTextual() || !allowedEvidence.contains(evidenceRef.asText())) {
-                    throw new KycOutputValidationException("finding 引用了不存在的证据");
+            if (evidenceRefs.size() > 10) {
+                throw new KycOutputValidationException(
+                        path + ".evidenceRefs 最多 10 项，实际 " + evidenceRefs.size() + " 项");
+            }
+            for (int evidenceIndex = 0; evidenceIndex < evidenceRefs.size(); evidenceIndex++) {
+                JsonNode evidenceRef = evidenceRefs.get(evidenceIndex);
+                if (!evidenceRef.isTextual()) {
+                    throw new KycOutputValidationException(
+                            path + ".evidenceRefs[" + evidenceIndex + "] 必须是 SRC-* 文本");
+                }
+                if (!allowedEvidence.contains(evidenceRef.asText())) {
+                    throw new KycOutputValidationException(
+                            path + ".evidenceRefs[" + evidenceIndex + "] 不在允许引用集合中");
                 }
             }
         }

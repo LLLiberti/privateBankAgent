@@ -35,6 +35,7 @@ public class KycAgentExecutor implements BusinessAgentExecutor<KycMaskedInput, K
             只能引用输入中已有的 SRC-* 编号，不得编造证据编号，不得输出原始姓名、企业名、联系方式、地址或其他被禁止信息。
             不得自行作出授信拒绝、服务限制或交易限制等业务决定，只能提出人工核验或复核建议。
             输出前逐项复核结论与证据；无证据支持的结论必须删除或改写为 dataGaps。
+            findings、riskAlerts、recommendedActions、dataGaps 各自最多 20 项；每条 finding 的 evidenceRefs 最多 10 项，且每项必须是允许引用列表中的单个 SRC-* 编号。
             """;
 
     private final StructuredAgentRuntime runtime;
