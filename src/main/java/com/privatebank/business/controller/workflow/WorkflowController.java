@@ -1,7 +1,9 @@
 package com.privatebank.business.controller.workflow;
 
 import com.privatebank.business.dto.workflow.ArtifactRefResponse;
+import com.privatebank.business.dto.workflow.AvailableImportBatchResponse;
 import com.privatebank.business.dto.workflow.CancelRequest;
+import com.privatebank.business.dto.workflow.CustomerManagerWorkflowResponse;
 import com.privatebank.business.dto.workflow.CreateWorkflowRequest;
 import com.privatebank.business.dto.workflow.OutputRetryRequest;
 import com.privatebank.business.dto.workflow.OutputStatusResponse;
@@ -15,9 +17,11 @@ import com.privatebank.business.dto.common.PageResponse;
 import com.privatebank.business.security.CurrentUserPrincipal;
 import com.privatebank.business.service.workflow.WorkflowService;
 import com.privatebank.business.enums.workflow.AgentType;
+import com.privatebank.business.enums.workflow.WorkflowStatus;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Positive;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
@@ -53,6 +57,27 @@ public class WorkflowController {
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @Valid @RequestBody CreateWorkflowRequest request) {
         return workflowService.create(principal, idempotencyKey, request);
+    }
+
+    @GetMapping("/import-batches")
+    @PreAuthorize("hasRole('CUSTOMER_MANAGER')")
+    public PageResponse<AvailableImportBatchResponse> availableImportBatches(
+            @AuthenticationPrincipal CurrentUserPrincipal principal,
+            @RequestParam @Positive Long customerId,
+            @RequestParam(defaultValue = "1") @Min(1) int pageNo,
+            @RequestParam(defaultValue = "50") @Min(1) @Max(100) int pageSize) {
+        return workflowService.availableImportBatches(principal, customerId, pageNo, pageSize);
+    }
+
+    @GetMapping
+    @PreAuthorize("hasRole('CUSTOMER_MANAGER')")
+    public PageResponse<CustomerManagerWorkflowResponse> workflows(
+            @AuthenticationPrincipal CurrentUserPrincipal principal,
+            @RequestParam(required = false) @Positive Long customerId,
+            @RequestParam(required = false) WorkflowStatus status,
+            @RequestParam(defaultValue = "1") @Min(1) int pageNo,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(100) int pageSize) {
+        return workflowService.customerManagerWorkflows(principal, customerId, status, pageNo, pageSize);
     }
 
     @GetMapping("/{workflowId}")

@@ -16,7 +16,9 @@ import com.privatebank.business.security.CurrentUserPrincipal;
 import com.privatebank.business.security.CurrentUserService;
 import com.privatebank.business.dto.workflow.AgentStateResponse;
 import com.privatebank.business.dto.workflow.ArtifactRefResponse;
+import com.privatebank.business.dto.workflow.AvailableImportBatchResponse;
 import com.privatebank.business.dto.workflow.CancelRequest;
+import com.privatebank.business.dto.workflow.CustomerManagerWorkflowResponse;
 import com.privatebank.business.dto.workflow.CreateWorkflowRequest;
 import com.privatebank.business.dto.workflow.OutputRetryRequest;
 import com.privatebank.business.dto.workflow.OutputStatusResponse;
@@ -36,6 +38,7 @@ import com.privatebank.business.entity.workflow.WorkflowState;
 import com.privatebank.business.enums.workflow.WorkflowStatus;
 import com.privatebank.business.mapper.workflow.AgentArtifactMapper;
 import com.privatebank.business.mapper.workflow.AgentStateMapper;
+import com.privatebank.business.mapper.workflow.ImportBatchMapper;
 import com.privatebank.business.mapper.workflow.WorkflowReviewMapper;
 import com.privatebank.business.mapper.workflow.WorkflowStateMapper;
 import lombok.RequiredArgsConstructor;
@@ -66,6 +69,7 @@ public class WorkflowService {
     private final AgentArtifactMapper artifactMapper;
     private final WorkflowReviewMapper reviewMapper;
     private final CustomerDataMapper customerDataMapper;
+    private final ImportBatchMapper importBatchMapper;
     private final CurrentUserService currentUserService;
     private final IdempotencyExecutor idempotencyExecutor;
     private final WorkflowEventHub eventHub;
@@ -81,10 +85,44 @@ public class WorkflowService {
         return idempotencyExecutor.execute(key, () -> createOnce(principal, request));
     }
 
+    @Transactional(readOnly = true)
+    public PageResponse<AvailableImportBatchResponse> availableImportBatches(
+            CurrentUserPrincipal principal, Long customerId, int pageNo, int pageSize) {
+        currentUserService.requireCustomerAccess(principal, customerId);
+        if (customerDataMapper.findSummary(customerId) == null) {
+            throw notFound("客户不存在");
+        }
+        long total = importBatchMapper.countAvailableForCustomer(customerId);
+        List<AvailableImportBatchResponse> items = importBatchMapper.findAvailableForCustomer(
+                customerId, (pageNo - 1) * pageSize, pageSize);
+        return PageResponse.of(items, total, pageNo, pageSize);
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<CustomerManagerWorkflowResponse> customerManagerWorkflows(
+            CurrentUserPrincipal principal,
+            Long customerId,
+            WorkflowStatus status,
+            int pageNo,
+            int pageSize) {
+        if (customerId != null) {
+            currentUserService.requireCustomerAccess(principal, customerId);
+        }
+        long total = workflowMapper.countForCustomerManager(principal.userId(), customerId, status);
+        List<CustomerManagerWorkflowResponse> items = workflowMapper.findForCustomerManager(
+                principal.userId(), customerId, status, (pageNo - 1) * pageSize, pageSize);
+        return PageResponse.of(items, total, pageNo, pageSize);
+    }
+
     private WorkflowCreatedResponse createOnce(CurrentUserPrincipal principal, CreateWorkflowRequest request) {
         currentUserService.requireCustomerAccess(principal, request.customerId());
         if (customerDataMapper.findSummary(request.customerId()) == null) {
             throw notFound("客户不存在");
+        }
+        if (!importBatchMapper.isCompletedAndAvailableForCustomer(
+                request.importBatchId(), request.customerId())) {
+            throw new BusinessException(HttpStatus.UNPROCESSABLE_ENTITY, ErrorCode.INVALID_ARGUMENT,
+                    "所选导入批次不可用、未完成或不包含该客户数据");
         }
         if (request.asOfDate().isAfter(java.time.LocalDate.now())) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, ErrorCode.INVALID_ARGUMENT, "asOfDate不能晚于当前日期");

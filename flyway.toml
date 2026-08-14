@@ -1,0 +1,9 @@
+[environments.default]
+url = "jdbc:mysql://47.116.18.232:3306/private_bank_agent?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai"
+user = "root"
+password = "ICBCSDCIntern@0710"
+
+[flyway]
+locations = ["filesystem:src/main/resources/db/migration"]
+baselineOnMigrate = true
+baselineVersion = "0"
