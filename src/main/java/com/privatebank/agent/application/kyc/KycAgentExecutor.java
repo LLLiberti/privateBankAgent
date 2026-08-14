@@ -28,6 +28,7 @@ public class KycAgentExecutor implements BusinessAgentExecutor<KycMaskedInput, K
             每项事实、风险等级、风险成因和建议都必须由结构化字段、受控语义标签或输入中已有的 SRC-* 证据支持。
             未核验、待确认、估算值或单位缺失的数据不得写成确定事实，应明确其不确定性并写入 dataGaps。
             对输入中有记录的 PERSON、ENTERPRISE、FAMILY、SOCIAL 维度给出具体 finding；每条 finding 的 evidenceRefs 必须覆盖其中陈述的主要事实。
+            managerSupplement.signals 是运行时受控语义线索，不是 SRC-* 证据。不得为它编造 evidenceRefs；仅由该线索支持的内容必须写成待核验的 dataGaps 或人工复核建议，不得写成确定事实 finding。
             relationshipGraph 是来自 Neo4j 的独立关系投影。必须将它与人、企、家、社结构化事实比较，判断其贡献是 INCREMENTAL、CONFIRMATORY、NO_INCREMENT 或 NOT_AVAILABLE，并填写 graphAssessment。
             只有 Neo4j 提供了结构化事实中没有的关系、二跳关联或跨记录风险链路时，才能标记 INCREMENTAL；此时至少一条 finding 必须引用 relationshipGraph.evidenceRefs 中的证据。
             CONFIRMATORY 表示图关系只交叉印证已有事实；NO_INCREMENT 表示图谱可用但没有形成新增或有效印证；不得为了使用 Neo4j 而虚构风险。
@@ -54,7 +55,7 @@ public class KycAgentExecutor implements BusinessAgentExecutor<KycMaskedInput, K
             StructuredAgentDefinition<KycStructuredResult> definition = new StructuredAgentDefinition<>(
                     "kyc-agent",
                     SYSTEM_PROMPT,
-                    userPrompt(request.input(), attempt > 1),
+                    userPrompt(request.input(), lastValidationError),
                     KycStructuredResult.class,
                     Math.max(1, properties.maxIterations()));
             AgentExecutionResult<KycStructuredResult> runtimeResult = runtime.execute(request, definition);
@@ -75,10 +76,14 @@ public class KycAgentExecutor implements BusinessAgentExecutor<KycMaskedInput, K
         return new KycGenerationResult(serialize(result.output()), result.attempts(), result.modelName());
     }
 
-    private String userPrompt(KycMaskedInput input, boolean repair) {
-        String instruction = repair
-                ? "上一版结构化结果未通过证据、脱敏或业务约束校验。请重新分析，严格确保每项结论有输入证据支持。"
-                : "请基于以下已脱敏 KYC 输入完成分析并在内部完成证据复核。";
+    private String userPrompt(KycMaskedInput input, KycOutputValidationException validationFailure) {
+        String instruction = validationFailure == null
+                ? "请基于以下已脱敏 KYC 输入完成分析并在内部完成证据复核。"
+                : "上一版结构化结果未通过证据、脱敏或业务约束校验。具体失败原因："
+                        + validationFailure.getMessage()
+                        + "。允许引用的全部证据编号："
+                        + input.evidenceReferences().keySet().stream().sorted().toList()
+                        + "。请针对该原因重新分析，不得编造证据编号。";
         return instruction + "\n" + serialize(input.payload());
     }
 
