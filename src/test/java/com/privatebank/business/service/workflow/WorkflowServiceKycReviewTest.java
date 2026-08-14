@@ -3,6 +3,12 @@ package com.privatebank.business.service.workflow;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.privatebank.business.common.idempotency.IdempotencyExecutor;
+import com.privatebank.business.common.exception.BusinessException;
+import com.privatebank.business.common.exception.ErrorCode;
+import com.privatebank.business.dto.customer.CustomerSummaryResponse;
+import com.privatebank.business.dto.workflow.AvailableImportBatchResponse;
+import com.privatebank.business.dto.workflow.CustomerManagerWorkflowResponse;
+import com.privatebank.business.dto.workflow.CreateWorkflowRequest;
 import com.privatebank.business.dto.workflow.WorkflowInputRequest;
 import com.privatebank.business.entity.workflow.AgentArtifact;
 import com.privatebank.business.entity.workflow.AgentState;
@@ -14,6 +20,7 @@ import com.privatebank.business.enums.workflow.WorkflowStatus;
 import com.privatebank.business.mapper.customer.CustomerDataMapper;
 import com.privatebank.business.mapper.workflow.AgentArtifactMapper;
 import com.privatebank.business.mapper.workflow.AgentStateMapper;
+import com.privatebank.business.mapper.workflow.ImportBatchMapper;
 import com.privatebank.business.mapper.workflow.WorkflowReviewMapper;
 import com.privatebank.business.mapper.workflow.WorkflowStateMapper;
 import com.privatebank.business.security.CurrentUserPrincipal;
@@ -23,6 +30,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
 
+import java.time.LocalDate;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -35,6 +43,56 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class WorkflowServiceKycReviewTest {
+
+    @Test
+    void listsOnlyCompletedBatchesThatContainSelectedCustomerData() {
+        Fixture fixture = fixture();
+        when(fixture.customerDataMapper.findSummary(100L)).thenReturn(customer());
+        AvailableImportBatchResponse batch = new AvailableImportBatchResponse(
+                4L, "batch-4", LocalDate.now().atStartOfDay(), 120);
+        when(fixture.importBatchMapper.countAvailableForCustomer(100L)).thenReturn(1L);
+        when(fixture.importBatchMapper.findAvailableForCustomer(100L, 0, 50)).thenReturn(List.of(batch));
+
+        var response = fixture.service.availableImportBatches(principal(), 100L, 1, 50);
+
+        assertThat(response.items()).containsExactly(batch);
+        assertThat(response.total()).isEqualTo(1);
+    }
+
+    @Test
+    void rejectsCreationWhenSelectedBatchIsNotAvailableForCustomer() {
+        Fixture fixture = fixture();
+        when(fixture.customerDataMapper.findSummary(100L)).thenReturn(customer());
+        when(fixture.importBatchMapper.isCompletedAndAvailableForCustomer(4L, 100L)).thenReturn(false);
+
+        assertThatThrownBy(() -> fixture.service.create(principal(), "create-key",
+                new CreateWorkflowRequest(100L, 4L, LocalDate.now(), "CFS-3P6-V1", null)))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> {
+                    BusinessException exception = (BusinessException) error;
+                    assertThat(exception.getStatus().value()).isEqualTo(422);
+                    assertThat(exception.getCode()).isEqualTo(ErrorCode.INVALID_ARGUMENT);
+                });
+
+        verify(fixture.workflowMapper, never()).insert(any(WorkflowState.class));
+    }
+
+    @Test
+    void listsOnlyCurrentManagersWorkflowsWithinTheirActiveCustomerScope() {
+        Fixture fixture = fixture();
+        CustomerManagerWorkflowResponse workflow = new CustomerManagerWorkflowResponse(
+                "WF-1", 100L, "Test Customer", WorkflowStatus.RUNNING,
+                "CFS-3P6-V1", LocalDate.now(), LocalDate.now().atStartOfDay());
+        when(fixture.workflowMapper.countForCustomerManager("U-1", null, WorkflowStatus.RUNNING)).thenReturn(1L);
+        when(fixture.workflowMapper.findForCustomerManager("U-1", null, WorkflowStatus.RUNNING, 0, 20))
+                .thenReturn(List.of(workflow));
+
+        var response = fixture.service.customerManagerWorkflows(
+                principal(), null, WorkflowStatus.RUNNING, 1, 20);
+
+        assertThat(response.items()).containsExactly(workflow);
+        assertThat(response.total()).isEqualTo(1);
+    }
 
     @Test
     void regeneratesKycWithRuntimeOnlyManagerSupplement() {
@@ -153,19 +211,27 @@ class WorkflowServiceKycReviewTest {
         AgentArtifactMapper artifactMapper = mock(AgentArtifactMapper.class);
         CurrentUserService currentUserService = mock(CurrentUserService.class);
         ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
+        CustomerDataMapper customerDataMapper = mock(CustomerDataMapper.class);
+        ImportBatchMapper importBatchMapper = mock(ImportBatchMapper.class);
         WorkflowService service = new WorkflowService(
                 workflowMapper,
                 agentStateMapper,
                 artifactMapper,
                 mock(WorkflowReviewMapper.class),
-                mock(CustomerDataMapper.class),
+                customerDataMapper,
+                importBatchMapper,
                 currentUserService,
                 new IdempotencyExecutor(180),
                 mock(WorkflowEventHub.class),
                 eventPublisher,
                 new ObjectMapper().findAndRegisterModules(),
                 mock(FileStorageService.class));
-        return new Fixture(service, workflowMapper, agentStateMapper, artifactMapper, eventPublisher);
+        return new Fixture(service, workflowMapper, agentStateMapper, artifactMapper, eventPublisher,
+                customerDataMapper, importBatchMapper);
+    }
+
+    private CustomerSummaryResponse customer() {
+        return new CustomerSummaryResponse(100L, "Test Customer", "Test Customer", "PERSON", "VERIFIED", "R2");
     }
 
     private CurrentUserPrincipal principal() {
@@ -206,6 +272,8 @@ class WorkflowServiceKycReviewTest {
             WorkflowStateMapper workflowMapper,
             AgentStateMapper agentStateMapper,
             AgentArtifactMapper artifactMapper,
-            ApplicationEventPublisher eventPublisher) {
+            ApplicationEventPublisher eventPublisher,
+            CustomerDataMapper customerDataMapper,
+            ImportBatchMapper importBatchMapper) {
     }
 }
