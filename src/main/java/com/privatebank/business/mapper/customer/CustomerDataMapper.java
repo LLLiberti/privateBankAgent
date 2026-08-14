@@ -130,8 +130,53 @@ public interface CustomerDataMapper {
             """)
     List<Map<String, Object>> findEnterpriseRelations(@Param("personId") Long personId);
 
+    @Select("""
+            SELECT b.*
+              FROM person_enterprise_relation r
+              JOIN enterprise_business b ON b.enterprise_id = r.enterprise_id
+             WHERE r.person_id = #{personId}
+             ORDER BY b.created_at DESC
+            """)
+    List<Map<String, Object>> findEnterpriseBusinesses(@Param("personId") Long personId);
+
+    @Select("""
+            SELECT m.*
+              FROM person_enterprise_relation r
+              JOIN enterprise_financial_metric m ON m.enterprise_id = r.enterprise_id
+             WHERE r.person_id = #{personId}
+             ORDER BY m.created_at DESC
+            """)
+    List<Map<String, Object>> findEnterpriseFinancialMetrics(@Param("personId") Long personId);
+
+    @Select("""
+            SELECT e.*
+              FROM person_enterprise_relation r
+              JOIN enterprise_event e ON e.enterprise_id = r.enterprise_id
+             WHERE r.person_id = #{personId}
+             ORDER BY e.event_date DESC, e.created_at DESC
+            """)
+    List<Map<String, Object>> findEnterpriseEvents(@Param("personId") Long personId);
+
+    @Select("""
+            SELECT m.*
+              FROM person_enterprise_relation r
+              JOIN enterprise_market_relation m ON m.enterprise_id = r.enterprise_id
+             WHERE r.person_id = #{personId}
+             ORDER BY m.created_at DESC
+            """)
+    List<Map<String, Object>> findEnterpriseMarketRelations(@Param("personId") Long personId);
+
     @Select("SELECT * FROM family_member WHERE person_id = #{personId} ORDER BY created_at DESC")
     List<Map<String, Object>> findFamilyMembers(@Param("personId") Long personId);
+
+    @Select("""
+            SELECT r.*, m.public_disclosure_level
+              FROM person_family_relation r
+              JOIN family_member m ON m.family_member_id = r.family_member_id
+             WHERE r.person_id = #{personId}
+             ORDER BY r.created_at DESC
+            """)
+    List<Map<String, Object>> findFamilyRelations(@Param("personId") Long personId);
 
     @Select("SELECT * FROM succession_arrangement WHERE person_id = #{personId} ORDER BY created_at DESC")
     List<Map<String, Object>> findSuccessionArrangements(@Param("personId") Long personId);

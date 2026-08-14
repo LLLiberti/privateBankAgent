@@ -1,7 +1,7 @@
 package com.privatebank.business.dto.admin;
 
 import com.privatebank.business.entity.workflow.WorkflowState;
-import com.privatebank.business.entity.workflow.WorkflowStatus;
+import com.privatebank.business.enums.workflow.WorkflowStatus;
 
 import java.time.LocalDateTime;
 

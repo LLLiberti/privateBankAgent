@@ -28,12 +28,12 @@ import com.privatebank.business.dto.workflow.WorkflowInputRequest;
 import com.privatebank.business.dto.workflow.WorkflowResultResponse;
 import com.privatebank.business.entity.workflow.AgentArtifact;
 import com.privatebank.business.entity.workflow.AgentState;
-import com.privatebank.business.entity.workflow.AgentStatus;
-import com.privatebank.business.entity.workflow.AgentType;
-import com.privatebank.business.entity.workflow.ReviewStatus;
+import com.privatebank.business.enums.workflow.AgentStatus;
+import com.privatebank.business.enums.workflow.AgentType;
+import com.privatebank.business.enums.workflow.ReviewStatus;
 import com.privatebank.business.entity.workflow.WorkflowReview;
 import com.privatebank.business.entity.workflow.WorkflowState;
-import com.privatebank.business.entity.workflow.WorkflowStatus;
+import com.privatebank.business.enums.workflow.WorkflowStatus;
 import com.privatebank.business.mapper.workflow.AgentArtifactMapper;
 import com.privatebank.business.mapper.workflow.AgentStateMapper;
 import com.privatebank.business.mapper.workflow.WorkflowReviewMapper;
@@ -76,7 +76,8 @@ public class WorkflowService {
     @Transactional
     public WorkflowCreatedResponse create(
             CurrentUserPrincipal principal, String idempotencyKey, CreateWorkflowRequest request) {
-        String key = principal.userId() + ":workflow:create:" + request.customerId() + ":" + idempotencyKey;
+        String key = principal.userId() + ":workflow:create:" + request.customerId() + ":"
+                + request.importBatchId() + ":" + idempotencyKey;
         return idempotencyExecutor.execute(key, () -> createOnce(principal, request));
     }
 
@@ -92,6 +93,7 @@ public class WorkflowService {
         WorkflowState workflow = new WorkflowState();
         workflow.setWorkflowId("WF-" + UUID.randomUUID());
         workflow.setPersonId(request.customerId());
+        workflow.setImportBatchId(request.importBatchId());
         workflow.setCreatedBy(principal.userId());
         workflow.setAsOfDate(request.asOfDate());
         workflow.setTemplateId(request.templateId());
@@ -114,11 +116,9 @@ public class WorkflowService {
             states.add(state);
         }
         states.forEach(agentStateMapper::insert);
-        afterCommit(() -> {
-            eventPublisher.publishEvent(new WorkflowCreatedEvent(workflow.getWorkflowId()));
-            eventHub.publish(workflow.getWorkflowId(), "WORKFLOW_CREATED",
-                    Map.of("workflowId", workflow.getWorkflowId(), "status", workflow.getWorkflowStatus()));
-        });
+        eventPublisher.publishEvent(new WorkflowCreatedEvent(workflow.getWorkflowId()));
+        afterCommit(() -> eventHub.publish(workflow.getWorkflowId(), "WORKFLOW_CREATED",
+                Map.of("workflowId", workflow.getWorkflowId(), "status", workflow.getWorkflowStatus())));
         return new WorkflowCreatedResponse(workflow.getWorkflowId(), workflow.getWorkflowStatus());
     }
 
@@ -162,24 +162,33 @@ public class WorkflowService {
         if (workflow.getWorkflowStatus() != WorkflowStatus.WAITING_INPUT) {
             throw conflict("当前工作流不接受人工输入");
         }
-        AgentArtifact current = artifactMapper.selectById(request.currentArtifactId());
-        if (current == null) {
-            throw notFound("当前Artifact不存在");
-        }
-        if (!workflowId.equals(current.getWorkflowId()) || current.getAgentType() != AgentType.CUSTOMER_INSIGHT) {
-            throw new BusinessException(HttpStatus.CONFLICT, ErrorCode.STALE_ARTIFACT, "当前Artifact不属于该工作流的KYC结果");
-        }
+        AgentArtifact current = requireCurrentKycArtifact(workflowId, request.currentArtifactId());
+
+        LocalDateTime now = LocalDateTime.now();
         if (request.action() == WorkflowInputRequest.Action.CONTINUE) {
             ready(workflowId, AgentType.MARKET_INSIGHT, true);
             ready(workflowId, AgentType.PRODUCT_EXPERT, true);
+            workflow.setWorkflowStatus(WorkflowStatus.RUNNING);
+            workflow.setUpdatedAt(now);
+            updateWorkflow(workflow);
+            List<AgentType> downstreamAgents = List.of(AgentType.MARKET_INSIGHT, AgentType.PRODUCT_EXPERT);
+            eventPublisher.publishEvent(new DownstreamAgentsReadyEvent(
+                    workflowId, current.getArtifactId(), downstreamAgents));
+            afterCommit(() -> eventHub.publish(workflowId, "DOWNSTREAM_AGENTS_READY",
+                    Map.of("workflowId", workflowId, "kycArtifactId", current.getArtifactId(),
+                            "agentTypes", downstreamAgents, "status", workflow.getWorkflowStatus())));
         } else {
+            requireSupplementForSupplementAction(request);
             ready(workflowId, AgentType.CUSTOMER_INSIGHT, true);
+            workflow.setWorkflowStatus(WorkflowStatus.RUNNING);
+            workflow.setUpdatedAt(now);
+            updateWorkflow(workflow);
+            eventPublisher.publishEvent(new KycRegenerationRequestedEvent(
+                    workflowId, request.description(), request.confirmedItems()));
+            afterCommit(() -> eventHub.publish(workflowId, "KYC_REGENERATION_REQUESTED",
+                    Map.of("workflowId", workflowId, "kycArtifactId", current.getArtifactId(),
+                            "status", workflow.getWorkflowStatus())));
         }
-        workflow.setWorkflowStatus(WorkflowStatus.RUNNING);
-        workflow.setUpdatedAt(LocalDateTime.now());
-        updateWorkflow(workflow);
-        afterCommit(() -> eventHub.publish(workflowId, "WORKFLOW_INPUT_PROVIDED",
-                Map.of("workflowId", workflowId, "status", workflow.getWorkflowStatus(), "action", request.action())));
         return detail(principal, workflowId);
     }
 
@@ -344,6 +353,33 @@ public class WorkflowService {
             throw new BusinessException(HttpStatus.CONFLICT, ErrorCode.STALE_ARTIFACT, "Artifact与当前工作流或阶段不匹配");
         }
         return artifact;
+    }
+
+    private AgentArtifact requireCurrentKycArtifact(String workflowId, String artifactId) {
+        AgentArtifact current = requireArtifact(workflowId, artifactId, AgentType.CUSTOMER_INSIGHT);
+        AgentArtifact latest = artifactMapper.selectOne(Wrappers.<AgentArtifact>lambdaQuery()
+                .eq(AgentArtifact::getWorkflowId, workflowId)
+                .eq(AgentArtifact::getAgentType, AgentType.CUSTOMER_INSIGHT)
+                .orderByDesc(AgentArtifact::getVersion)
+                .last("LIMIT 1"));
+        if (latest == null || !current.getArtifactId().equals(latest.getArtifactId())) {
+            throw new BusinessException(HttpStatus.CONFLICT, ErrorCode.STALE_ARTIFACT,
+                    "当前KYC结果不是该工作流的最新版本，请刷新后重新审核");
+        }
+        return current;
+    }
+
+    private void requireSupplementForSupplementAction(WorkflowInputRequest request) {
+        if (request.action() != WorkflowInputRequest.Action.SUPPLEMENT) {
+            return;
+        }
+        boolean hasDescription = StringUtils.hasText(request.description());
+        boolean hasConfirmedItem = request.confirmedItems() != null
+                && request.confirmedItems().stream().anyMatch(StringUtils::hasText);
+        if (!hasDescription && !hasConfirmedItem) {
+            throw new BusinessException(HttpStatus.BAD_REQUEST, ErrorCode.INVALID_ARGUMENT,
+                    "补充KYC信息时必须提供补充说明或已确认事项");
+        }
     }
 
     private void verifyComplianceTargetsCfs(AgentArtifact compliance, AgentArtifact cfs) {

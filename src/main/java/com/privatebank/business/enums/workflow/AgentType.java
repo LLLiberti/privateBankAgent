@@ -1,4 +1,4 @@
-package com.privatebank.business.entity.workflow;
+package com.privatebank.business.enums.workflow;
 
 public enum AgentType {
     CUSTOMER_INSIGHT,

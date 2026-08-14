@@ -1,0 +1,80 @@
+spring:
+  application:
+    name: private-bank-backend
+  datasource:
+    url: ${PRIVATE_BANK_DB_URL:jdbc:mysql://47.116.18.232:3306/private_bank_agent?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}
+    username: root
+    password: ICBCSDCIntern@0710
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 1
+      connection-timeout: 10000
+      max-lifetime: ${PRIVATE_BANK_DB_MAX_LIFETIME_MS:240000}
+      keepalive-time: ${PRIVATE_BANK_DB_KEEPALIVE_TIME_MS:60000}
+      validation-timeout: ${PRIVATE_BANK_DB_VALIDATION_TIMEOUT_MS:5000}
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 0
+    locations: classpath:db/migration
+  elasticsearch:
+    uris: ${PRIVATE_BANK_ES_URIS:https://124.220.33.106:9200}
+    username: ${PRIVATE_BANK_ES_USERNAME:elastic}
+    password: ${PRIVATE_BANK_ES_PASSWORD:ICBCSDCIntern@0710}
+  neo4j:
+    uri: ${PRIVATE_BANK_NEO4J_URI:http://47.116.18.232:7474/browser/}
+    authentication:
+      username: ${PRIVATE_BANK_NEO4J_USERNAME:neo4j}
+      password: ${PRIVATE_BANK_NEO4J_PASSWORD:ICBCSDCIntern@0710}
+    database: ${PRIVATE_BANK_NEO4J_DATABASE:neo4j }
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 20MB
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    default-enum-type-handler: org.apache.ibatis.type.EnumTypeHandler
+  global-config:
+    banner: false
+    db-config:
+      update-strategy: not_null
+
+server:
+  port: ${SERVER_PORT:8080}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+
+private-bank:
+  agent-runtime:
+    deepseek:
+      base-url: ${PRIVATE_BANK_DEEPSEEK_BASE_URL:https://api.deepseek.com/v1}
+      api-key: ${PRIVATE_BANK_DEEPSEEK_API_KEY:}
+      model: ${PRIVATE_BANK_DEEPSEEK_CHAT_MODEL:deepseek-v4-flash}
+      temperature: 0
+    max-model-retries: 2
+    max-iterations: 4
+    max-business-repair-attempts: 2
+  knowledge:
+    qdrant:
+      host: ${PRIVATE_BANK_QDRANT_HOST:124.220.33.106}
+      port: ${PRIVATE_BANK_QDRANT_PORT:6334}
+      api-key: ${PRIVATE_BANK_QDRANT_API_KEY:84f0abc6e09105509f02ea82d66bce7761428fd4bae5f5616ae4aba7f372a3e4}
+      collection-name: ${PRIVATE_BANK_QDRANT_COLLECTION:}
+      initialize-schema: ${PRIVATE_BANK_QDRANT_INITIALIZE_SCHEMA:false}
+  security:
+    jwt:
+      secret: 5614c60a743654ca88265373126e80540b4b6614aca204fd6aedc0e94bbc1770
+      issuer: private-bank-backend
+      ttl-minutes: 120
+      renewal-threshold-minutes: 30
+  storage:
+    root: ${PRIVATE_BANK_STORAGE_ROOT:./storage}
+    max-file-size-bytes: 20971520
+  idempotency:
+    ttl-minutes: 180

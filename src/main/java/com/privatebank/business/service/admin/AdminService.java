@@ -6,7 +6,7 @@ import com.privatebank.business.dto.admin.AdminWorkflowResponse;
 import com.privatebank.business.dto.common.PageResponse;
 import com.privatebank.business.common.exception.BusinessException;
 import com.privatebank.business.common.exception.ErrorCode;
-import com.privatebank.business.entity.workflow.WorkflowStatus;
+import com.privatebank.business.enums.workflow.WorkflowStatus;
 import com.privatebank.business.entity.workflow.WorkflowState;
 import com.privatebank.business.mapper.workflow.WorkflowStateMapper;
 import lombok.RequiredArgsConstructor;
