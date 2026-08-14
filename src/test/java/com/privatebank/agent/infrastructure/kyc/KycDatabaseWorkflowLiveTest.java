@@ -609,6 +609,7 @@ class KycDatabaseWorkflowLiveTest {
                 AgentArtifactMapper agentArtifactMapper,
                 com.privatebank.business.mapper.workflow.WorkflowReviewMapper reviewMapper,
                 CustomerDataMapper customerDataMapper,
+                com.privatebank.business.mapper.workflow.ImportBatchMapper importBatchMapper,
                 CurrentUserService currentUserService,
                 IdempotencyExecutor idempotencyExecutor,
                 WorkflowEventHub eventHub,
@@ -616,7 +617,7 @@ class KycDatabaseWorkflowLiveTest {
                 ObjectMapper objectMapper,
                 FileStorageService fileStorageService) {
             return new WorkflowService(
-                    workflowStateMapper, agentStateMapper, agentArtifactMapper, reviewMapper, customerDataMapper,
+                    workflowStateMapper, agentStateMapper, agentArtifactMapper, reviewMapper, customerDataMapper, importBatchMapper,
                     currentUserService, idempotencyExecutor, eventHub, eventPublisher, objectMapper, fileStorageService);
         }
 
