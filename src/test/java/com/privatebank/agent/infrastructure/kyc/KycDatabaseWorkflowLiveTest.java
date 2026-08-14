@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.privatebank.agent.adapter.workflow.KycWorkflowListener;
 import com.privatebank.agent.application.kyc.KycRuntimeSupplement;
 import com.privatebank.agent.application.kyc.KycRuntimeSupplementProjector;
+import com.privatebank.agent.application.kyc.KycSensitiveTextPolicy;
 import com.privatebank.agent.application.kyc.KycAgentExecutor;
 import com.privatebank.agent.application.kyc.KycDataMaskingService;
 import com.privatebank.agent.application.kyc.KycGraphDataLoader;
@@ -19,6 +20,7 @@ import com.privatebank.agent.infrastructure.agentscope.AgentRuntimeContextFactor
 import com.privatebank.agent.infrastructure.agentscope.AgentScopeExecutionEngine;
 import com.privatebank.agent.domain.kyc.KycCustomerData;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
+import com.privatebank.agent.domain.kyc.KycOutputValidationException;
 import com.privatebank.business.common.idempotency.IdempotencyExecutor;
 import com.privatebank.business.common.exception.BusinessException;
 import com.privatebank.business.common.exception.ErrorCode;
@@ -481,7 +483,28 @@ class KycDatabaseWorkflowLiveTest {
 
         @Bean
         KycOutputValidator kycOutputValidator(ObjectMapper objectMapper) {
-            return new KycOutputValidator(objectMapper);
+            return new KycOutputValidator(objectMapper) {
+                @Override
+                public String validate(String rawOutput, KycMaskedInput input) {
+                    try {
+                        return super.validate(rawOutput, input);
+                    } catch (KycOutputValidationException exception) {
+                        String diagnosticOutput = rawOutput;
+                        List<String> prohibitedTerms = input.prohibitedTerms().stream()
+                                .sorted((left, right) -> Integer.compare(right.length(), left.length()))
+                                .toList();
+                        for (String prohibitedTerm : prohibitedTerms) {
+                            diagnosticOutput = KycSensitiveTextPolicy.replaceTerm(
+                                    diagnosticOutput, prohibitedTerm, "[MATCHED_ENTITY_TERM]");
+                        }
+                        diagnosticOutput = KycSensitiveTextPolicy.redactDirectIdentifiers(diagnosticOutput);
+                        System.out.printf(
+                                "[KYC rejected output diagnostic] validationError=%s output=%s%n",
+                                exception.getMessage(), diagnosticOutput);
+                        throw exception;
+                    }
+                }
+            };
         }
 
         @Bean

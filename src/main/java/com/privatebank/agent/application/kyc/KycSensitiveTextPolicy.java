@@ -31,8 +31,9 @@ public final class KycSensitiveTextPolicy {
             "(?:(?:姓名|联系人|客户经理)|(?:配偶|子女)(?:姓名)?)"
                     + "\\s*(?:[:：]|为|是|叫)\\s*[\\p{IsHan}·]{2,8}");
     private static final Pattern PRECISE_STREET_ADDRESS = Pattern.compile(
-            "(?:[\\p{IsHan}]{2,12}(?:省|自治区|特别行政区|市|区|县)){0,4}"
-                    + "[\\p{IsHan}A-Za-z0-9]{1,20}(?:路|街|巷|弄)\\s*\\d{0,6}号?"
+            "(?:(?:[\\p{IsHan}]{2,12}(?:省|自治区|特别行政区|市|区|县)){1,4}"
+                    + "[\\p{IsHan}A-Za-z0-9]{1,20}(?:路|街|巷|弄)(?:\\s*\\d{1,6}号?)?"
+                    + "|[\\p{IsHan}A-Za-z0-9]{2,20}(?:路|街|巷|弄)\\s*\\d{1,6}号)"
                     + "(?:\\s*\\d{1,6}(?:栋|幢|单元|室))?",
             Pattern.CASE_INSENSITIVE);
     private static final Pattern PRECISE_LANDMARK = Pattern.compile(

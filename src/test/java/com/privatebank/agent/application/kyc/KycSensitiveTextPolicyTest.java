@@ -22,6 +22,14 @@ class KycSensitiveTextPolicyTest {
     }
 
     @Test
+    void doesNotTreatBusinessWordsEndingInRoadAsAddresses() {
+        assertThat(KycSensitiveTextPolicy.containsDirectIdentifier("需要核验跨记录风险链路")).isFalse();
+        assertThat(KycSensitiveTextPolicy.containsDirectIdentifier("形成完整关系链路和处置思路")).isFalse();
+        assertThat(KycSensitiveTextPolicy.containsDirectIdentifier("北京市朝阳区建国路")).isTrue();
+        assertThat(KycSensitiveTextPolicy.containsDirectIdentifier("办公地点建国路88号")).isTrue();
+    }
+
+    @Test
     void appliesBoundariesToAsciiAndNumericProhibitedTerms() {
         assertThat(KycSensitiveTextPolicy.containsProhibitedTerm("Johnson", Set.of("John"))).isFalse();
         assertThat(KycSensitiveTextPolicy.containsProhibitedTerm("John", Set.of("John"))).isTrue();
