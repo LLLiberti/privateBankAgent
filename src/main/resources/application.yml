@@ -9,6 +9,9 @@ spring:
       maximum-pool-size: 10
       minimum-idle: 1
       connection-timeout: 10000
+      max-lifetime: ${PRIVATE_BANK_DB_MAX_LIFETIME_MS:240000}
+      keepalive-time: ${PRIVATE_BANK_DB_KEEPALIVE_TIME_MS:60000}
+      validation-timeout: ${PRIVATE_BANK_DB_VALIDATION_TIMEOUT_MS:5000}
   flyway:
     enabled: true
     baseline-on-migrate: true
@@ -25,23 +28,6 @@ spring:
       username: ${PRIVATE_BANK_NEO4J_USERNAME:neo4j}
       password: ${PRIVATE_BANK_NEO4J_PASSWORD:ICBCSDCIntern@0710}
     database: ${PRIVATE_BANK_NEO4J_DATABASE:neo4j }
-  ai:
-    model:
-      chat: deepseek
-    deepseek:
-      base-url: ${PRIVATE_BANK_DEEPSEEK_BASE_URL:https://api.deepseek.com}
-      api-key: ${PRIVATE_BANK_DEEPSEEK_API_KEY:sk-7354731b2f3e482788bf0deb91682cb7}
-      chat:
-        options:
-          model: ${PRIVATE_BANK_DEEPSEEK_CHAT_MODEL:deepseek-v4-flash}
-    vectorstore:
-      type: none
-      qdrant:
-        host: ${PRIVATE_BANK_QDRANT_HOST:124.220.33.106}
-        port: ${PRIVATE_BANK_QDRANT_PORT:6334}
-        api-key: ${PRIVATE_BANK_QDRANT_API_KEY:84f0abc6e09105509f02ea82d66bce7761428fd4bae5f5616ae4aba7f372a3e4}
-        collection-name: ${PRIVATE_BANK_QDRANT_COLLECTION:}
-        initialize-schema: ${PRIVATE_BANK_QDRANT_INITIALIZE_SCHEMA:false}
   servlet:
     multipart:
       max-file-size: 20MB
@@ -66,6 +52,22 @@ management:
         include: health,info,metrics,prometheus
 
 private-bank:
+  agent-runtime:
+    deepseek:
+      base-url: ${PRIVATE_BANK_DEEPSEEK_BASE_URL:https://api.deepseek.com/v1}
+      api-key: ${PRIVATE_BANK_DEEPSEEK_API_KEY:}
+      model: ${PRIVATE_BANK_DEEPSEEK_CHAT_MODEL:deepseek-v4-flash}
+      temperature: 0
+    max-model-retries: 2
+    max-iterations: 4
+    max-business-repair-attempts: 2
+  knowledge:
+    qdrant:
+      host: ${PRIVATE_BANK_QDRANT_HOST:124.220.33.106}
+      port: ${PRIVATE_BANK_QDRANT_PORT:6334}
+      api-key: ${PRIVATE_BANK_QDRANT_API_KEY:84f0abc6e09105509f02ea82d66bce7761428fd4bae5f5616ae4aba7f372a3e4}
+      collection-name: ${PRIVATE_BANK_QDRANT_COLLECTION:}
+      initialize-schema: ${PRIVATE_BANK_QDRANT_INITIALIZE_SCHEMA:false}
   security:
     jwt:
       secret: 5614c60a743654ca88265373126e80540b4b6614aca204fd6aedc0e94bbc1770
