@@ -107,17 +107,7 @@ class KycAgentExecutorTest {
 
     @Test
     void acceptsIncrementalGraphAssessmentOnlyWhenFindingUsesNeo4jEvidence() {
-        KycMaskedInput graphInput = new KycMaskedInput(
-                Map.of(
-                        "person", Map.of("customer", Map.of("riskLevel", "HIGH")),
-                        "relationshipGraph", Map.of(
-                                "available", true,
-                                "relationshipCount", 1,
-                                "evidenceRefs", List.of("SRC-2"),
-                                "relationships", List.of(Map.of("sourceRef", "SRC-2")))),
-                Map.of("SRC-1", 1001L, "SRC-2", 2001L),
-                Set.of(),
-                "c".repeat(64));
+        KycMaskedInput graphInput = graphInput();
         KycStructuredResult graphResult = new KycStructuredResult(
                 KycStructuredResult.RiskLevel.HIGH,
                 "图关系提供了结构化事实之外的二跳关联",
@@ -138,6 +128,60 @@ class KycAgentExecutorTest {
 
         assertThat(result.output().graphAssessment().contribution())
                 .isEqualTo(KycStructuredResult.GraphContribution.INCREMENTAL);
+    }
+
+    @Test
+    void acceptsNoIncrementGraphAssessmentWithoutEvidenceReferences() {
+        KycMaskedInput graphInput = graphInput();
+        KycStructuredResult noIncrementResult = new KycStructuredResult(
+                KycStructuredResult.RiskLevel.LOW,
+                "图关系没有形成新增或有效印证",
+                List.of(), List.of(), List.of(), List.of(),
+                new KycStructuredResult.GraphAssessment(
+                        KycStructuredResult.GraphContribution.NO_INCREMENT,
+                        "已检查可用图关系，未发现新增或有效印证",
+                        List.of()));
+
+        AgentExecutionResult<KycStructuredResult> result = executor(
+                runtime(new AtomicInteger(), noIncrementResult), 1)
+                .execute(new AgentExecutionRequest<>(
+                        "WF-1", "EXE-1", AgentType.CUSTOMER_INSIGHT, "SYSTEM", graphInput, Map.of()));
+
+        assertThat(result.output().graphAssessment().contribution())
+                .isEqualTo(KycStructuredResult.GraphContribution.NO_INCREMENT);
+        assertThat(result.output().graphAssessment().evidenceRefs()).isEmpty();
+    }
+
+    @Test
+    void rejectsConfirmatoryGraphAssessmentWithoutEvidenceReferences() {
+        KycStructuredResult confirmatoryResult = new KycStructuredResult(
+                KycStructuredResult.RiskLevel.LOW,
+                "图关系交叉印证已有事实",
+                List.of(), List.of(), List.of(), List.of(),
+                new KycStructuredResult.GraphAssessment(
+                        KycStructuredResult.GraphContribution.CONFIRMATORY,
+                        "图关系交叉印证已有事实",
+                        List.of()));
+
+        assertThatThrownBy(() -> executor(runtime(new AtomicInteger(), confirmatoryResult), 1)
+                .execute(new AgentExecutionRequest<>(
+                        "WF-1", "EXE-1", AgentType.CUSTOMER_INSIGHT, "SYSTEM", graphInput(), Map.of())))
+                .isInstanceOf(KycGenerationException.class)
+                .hasRootCauseMessage("graphAssessment 为 INCREMENTAL 或 CONFIRMATORY 时必须引用 Neo4j 关系证据");
+    }
+
+    private KycMaskedInput graphInput() {
+        return new KycMaskedInput(
+                Map.of(
+                        "person", Map.of("customer", Map.of("riskLevel", "HIGH")),
+                        "relationshipGraph", Map.of(
+                                "available", true,
+                                "relationshipCount", 1,
+                                "evidenceRefs", List.of("SRC-2"),
+                                "relationships", List.of(Map.of("sourceRef", "SRC-2")))),
+                Map.of("SRC-1", 1001L, "SRC-2", 2001L),
+                Set.of(),
+                "c".repeat(64));
     }
 
     private StructuredAgentRuntime runtime(AtomicInteger calls, KycStructuredResult output) {

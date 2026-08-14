@@ -74,8 +74,12 @@ public class KycOutputValidator {
             }
             return;
         }
-        if ("NOT_AVAILABLE".equals(contribution) || evidenceRefs.isEmpty()) {
-            throw new KycOutputValidationException("Neo4j 关系可用时必须给出贡献判断和关系证据");
+        if ("NOT_AVAILABLE".equals(contribution)) {
+            throw new KycOutputValidationException("Neo4j 关系可用时 graphAssessment 不能为 NOT_AVAILABLE");
+        }
+        if (!"NO_INCREMENT".equals(contribution) && evidenceRefs.isEmpty()) {
+            throw new KycOutputValidationException(
+                    "graphAssessment 为 INCREMENTAL 或 CONFIRMATORY 时必须引用 Neo4j 关系证据");
         }
         if ("INCREMENTAL".equals(contribution) && !findingsUseEvidence(findings, graphEvidence)) {
             throw new KycOutputValidationException("Neo4j 标记为 INCREMENTAL 时至少一条 finding 必须引用图关系证据");
