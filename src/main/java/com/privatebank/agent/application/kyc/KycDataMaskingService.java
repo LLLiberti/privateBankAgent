@@ -42,7 +42,7 @@ public class KycDataMaskingService {
     private static final Set<String> DIRECT_IDENTIFIER_KEYS = Set.of(
             "fullname", "displayname", "membername", "protectedalias", "enterprisename",
             "organizationname", "counterpartname", "activityname", "partnername", "publishername",
-            "stockcode", "email", "phone", "mobile", "idnumber", "accountnumber", "bankaccount");
+            "stockcode", "email", "phone", "mobile", "idnumber", "accountnumber", "bankaccount", "rawtext");
     private static final Set<String> METADATA_KEYS = Set.of(
             "createdat", "updatedat", "createtime", "updatetime", "personid", "customerid", "sourceid");
 

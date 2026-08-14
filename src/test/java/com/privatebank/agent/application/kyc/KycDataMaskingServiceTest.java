@@ -125,11 +125,13 @@ class KycDataMaskingServiceTest {
         KycCustomerData base = sampleData();
         Map<String, Object> unknownRiskRecord = new java.util.LinkedHashMap<>();
         unknownRiskRecord.put("source_id", 777L);
+        unknownRiskRecord.put("raw_text", "must never cross the model boundary");
         unknownRiskRecord.put("investment_horizon", "5年以上");
         unknownRiskRecord.put("liquidity_requirement", "中等");
         unknownRiskRecord.put("custom_scenario", Map.of(
                 "comment", "马化腾计划联系13800138000并长期配置人工智能主题",
-                "allocation_ratio", 45));
+                "allocation_ratio", 45,
+                "raw_text", "nested raw evidence must also be removed"));
         KycCustomerData data = new KycCustomerData(
                 base.summary(), base.profile(), base.careers(), List.of(unknownRiskRecord), base.financialFacts(),
                 base.holdings(), base.financialEvents(), base.serviceRecords(), base.interactionNotes(),
@@ -139,6 +141,8 @@ class KycDataMaskingServiceTest {
                 base.socialActivities(), base.publicReputations(), base.reputationRisks(), base.graphRelationships());
 
         String payload = objectMapper.writeValueAsString(maskingService.mask(data).payload());
+
+        assertThat(payload).doesNotContain("raw_text", "must never cross", "nested raw evidence");
 
         assertThat(payload).contains("5年以上", "中等", "custom_scenario", "allocation_ratio", "长期配置人工智能主题");
         assertThat(payload).contains("P-1", "[PHONE_REDACTED]");
