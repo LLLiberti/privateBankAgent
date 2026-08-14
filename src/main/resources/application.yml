@@ -16,6 +16,7 @@ spring:
     enabled: true
     baseline-on-migrate: true
     baseline-version: 0
+    ignore-migration-patterns: "*:ignored"
     locations: classpath:db/migration
   elasticsearch:
     uris: ${PRIVATE_BANK_ES_URIS:https://124.220.33.106:9200}
