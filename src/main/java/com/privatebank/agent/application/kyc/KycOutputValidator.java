@@ -10,7 +10,6 @@ import org.springframework.stereotype.Component;
 
 import java.util.Iterator;
 import java.util.LinkedHashSet;
-import java.util.Locale;
 import java.util.Set;
 
 @Component
@@ -42,7 +41,7 @@ public class KycOutputValidator {
         validateTextArray(root.path("recommendedActions"), 20, 600, "recommendedActions 无效");
         validateTextArray(root.path("dataGaps"), 20, 600, "dataGaps 无效");
         validateGraphAssessment(root.path("graphAssessment"), root.path("findings"), input);
-        rejectProhibitedTerms(root.toString(), input.prohibitedTerms());
+        rejectSensitiveText(root, input.prohibitedTerms());
         try {
             return objectMapper.writeValueAsString(root);
         } catch (JsonProcessingException exception) {
@@ -150,6 +149,9 @@ public class KycOutputValidator {
             if (!evidenceRefs.isArray()) {
                 throw new KycOutputValidationException(path + ".evidenceRefs 必须是数组");
             }
+            if (evidenceRefs.isEmpty()) {
+                throw new KycOutputValidationException(path + ".evidenceRefs 至少包含一项证据");
+            }
             if (evidenceRefs.size() > 10) {
                 throw new KycOutputValidationException(
                         path + ".evidenceRefs 最多 10 项，实际 " + evidenceRefs.size() + " 项");
@@ -204,13 +206,15 @@ public class KycOutputValidator {
         }
     }
 
-    private void rejectProhibitedTerms(String output, Set<String> prohibitedTerms) {
-        String normalizedOutput = output.toLowerCase(Locale.ROOT);
-        boolean leaked = prohibitedTerms.stream()
-                .map(term -> term.toLowerCase(Locale.ROOT))
-                .anyMatch(normalizedOutput::contains);
-        if (leaked) {
-            throw new KycOutputValidationException("KYC 结果包含未脱敏标识");
+    private void rejectSensitiveText(JsonNode value, Set<String> prohibitedTerms) {
+        if (value.isTextual()) {
+            KycSensitiveTextPolicy.rejectOutput(value.asText(), prohibitedTerms);
+            return;
+        }
+        if (value.isContainerNode()) {
+            for (JsonNode child : value) {
+                rejectSensitiveText(child, prohibitedTerms);
+            }
         }
     }
 }

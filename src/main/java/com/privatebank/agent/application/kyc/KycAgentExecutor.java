@@ -33,6 +33,8 @@ public class KycAgentExecutor implements BusinessAgentExecutor<KycMaskedInput, K
             只有 Neo4j 提供了结构化事实中没有的关系、二跳关联或跨记录风险链路时，才能标记 INCREMENTAL；此时至少一条 finding 必须引用 relationshipGraph.evidenceRefs 中的证据。
             CONFIRMATORY 表示图关系只交叉印证已有事实；NO_INCREMENT 表示图谱可用但没有形成新增或有效印证，此时 graphAssessment.evidenceRefs 可以为空；INCREMENTAL 和 CONFIRMATORY 必须引用 relationshipGraph.evidenceRefs 中的证据。不得为了使用 Neo4j 而虚构风险。
             只能引用输入中已有的 SRC-* 编号，不得编造证据编号，不得输出原始姓名、企业名、联系方式、地址或其他被禁止信息。
+            不得根据出生年份、任职经历、财富数值、事件时间或关系图组合猜测客户及关联实体的真实身份；所有主体只能使用输入中的 P-*、E-*、O-*、F-*、C-* 等别名。
+            dataCompleteness 只描述安全省略和截断；存在 omissions 或 truncatedSections 时，应在 dataGaps 中说明分析范围受限，不得补全被省略内容。
             不得自行作出授信拒绝、服务限制或交易限制等业务决定，只能提出人工核验或复核建议。
             输出前逐项复核结论与证据；无证据支持的结论必须删除或改写为 dataGaps。
             findings、riskAlerts、recommendedActions、dataGaps 各自最多 20 项；每条 finding 的 evidenceRefs 最多 10 项，且每项必须是允许引用列表中的单个 SRC-* 编号。
@@ -84,7 +86,9 @@ public class KycAgentExecutor implements BusinessAgentExecutor<KycMaskedInput, K
                         + validationFailure.getMessage()
                         + "。允许引用的全部证据编号："
                         + input.evidenceReferences().keySet().stream().sorted().toList()
-                        + "。请针对该原因重新分析，不得编造证据编号。";
+                        + "。请针对该原因从头重写结果，不得编造证据编号。"
+                        + "若失败原因涉及直接标识信息，必须删除所有真实人名、机构名、地点名和联系方式，"
+                        + "且不得根据业务事实猜测专有名词；主体一律只写 P-*、E-*、O-*、F-*、C-* 别名。";
         return instruction + "\n" + serialize(input.payload());
     }
 

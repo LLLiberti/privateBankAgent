@@ -101,7 +101,8 @@ class KycAgentExecutorTest {
         assertThat(captured.get().outputType()).isEqualTo(KycStructuredResult.class);
         assertThat(captured.get().systemPrompt()).contains(
                 "SRC-*", "不得猜测", "dataGaps", "graphAssessment",
-                "managerSupplement.signals", "不是 SRC-* 证据", "evidenceRefs 最多 10 项");
+                "managerSupplement.signals", "不是 SRC-* 证据", "evidenceRefs 最多 10 项",
+                "不得根据出生年份", "dataCompleteness");
         assertThat(captured.get().userPrompt()).contains("customer", "riskLevel");
     }
 
@@ -170,6 +171,40 @@ class KycAgentExecutorTest {
                 .hasRootCauseMessage("graphAssessment 为 INCREMENTAL 或 CONFIRMATORY 时必须引用 Neo4j 关系证据");
     }
 
+    @Test
+    void rejectsEntityShortNamesAndFormattedDirectIdentifiersInOutput() {
+        assertThatThrownBy(() -> executor(runtime(new AtomicInteger(), validResult("腾讯存在风险")), 1)
+                .execute(request()))
+                .isInstanceOf(KycGenerationException.class)
+                .hasRootCauseMessage("KYC 结果包含未脱敏直接标识信息(ENTITY_TERM)");
+
+        assertThatThrownBy(() -> executor(runtime(new AtomicInteger(), validResult("联系电话010-12345678")), 1)
+                .execute(request()))
+                .isInstanceOf(KycGenerationException.class)
+                .hasRootCauseMessage("KYC 结果包含未脱敏直接标识信息(PHONE)");
+    }
+
+    @Test
+    void rejectsFindingWithoutEvidence() {
+        KycStructuredResult invalid = new KycStructuredResult(
+                KycStructuredResult.RiskLevel.HIGH,
+                "缺少证据",
+                List.of(new KycStructuredResult.Finding(
+                        KycStructuredResult.Dimension.PERSON,
+                        KycStructuredResult.RiskLevel.HIGH,
+                        "无证据结论",
+                        List.of())),
+                List.of(), List.of(), List.of(),
+                new KycStructuredResult.GraphAssessment(
+                        KycStructuredResult.GraphContribution.NOT_AVAILABLE,
+                        "没有图关系",
+                        List.of()));
+
+        assertThatThrownBy(() -> executor(runtime(new AtomicInteger(), invalid), 1).execute(request()))
+                .isInstanceOf(KycGenerationException.class)
+                .hasRootCauseMessage("findings[0].evidenceRefs 至少包含一项证据");
+    }
+
     private KycMaskedInput graphInput() {
         return new KycMaskedInput(
                 Map.of(
@@ -212,7 +247,7 @@ class KycAgentExecutorTest {
                         "relationshipGraph", Map.of("available", false, "relationshipCount", 0,
                                 "evidenceRefs", List.of(), "relationships", List.of())),
                 Map.of("SRC-1", 1001L),
-                Set.of("张三", "星海集团"),
+                Set.of("张三", "星海集团", "腾讯控股有限公司", "腾讯"),
                 "a".repeat(64));
     }
 
