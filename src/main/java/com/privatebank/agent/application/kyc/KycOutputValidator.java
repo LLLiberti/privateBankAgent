@@ -74,8 +74,12 @@ public class KycOutputValidator {
             }
             return;
         }
-        if ("NOT_AVAILABLE".equals(contribution) || evidenceRefs.isEmpty()) {
-            throw new KycOutputValidationException("Neo4j 关系可用时必须给出贡献判断和关系证据");
+        if ("NOT_AVAILABLE".equals(contribution)) {
+            throw new KycOutputValidationException("Neo4j 关系可用时 graphAssessment 不能为 NOT_AVAILABLE");
+        }
+        if (!"NO_INCREMENT".equals(contribution) && evidenceRefs.isEmpty()) {
+            throw new KycOutputValidationException(
+                    "graphAssessment 为 INCREMENTAL 或 CONFIRMATORY 时必须引用 Neo4j 关系证据");
         }
         if ("INCREMENTAL".equals(contribution) && !findingsUseEvidence(findings, graphEvidence)) {
             throw new KycOutputValidationException("Neo4j 标记为 INCREMENTAL 时至少一条 finding 必须引用图关系证据");
@@ -134,18 +138,31 @@ public class KycOutputValidator {
         if (!findings.isArray() || findings.size() > 20) {
             throw new KycOutputValidationException("findings 必须是最多 20 项的数组");
         }
-        for (JsonNode finding : findings) {
-            requireObject(finding, "finding 必须是对象");
-            requireExactFields(finding, FINDING_FIELDS, "finding 字段不符合 KYC 合约");
-            requireEnum(finding.path("dimension"), DIMENSIONS, "finding.dimension 无效");
-            requireEnum(finding.path("riskLevel"), RISK_LEVELS, "finding.riskLevel 无效");
-            requireText(finding.path("finding"), 800, "finding.finding 无效");
-            if (!finding.path("evidenceRefs").isArray() || finding.path("evidenceRefs").size() > 10) {
-                throw new KycOutputValidationException("finding.evidenceRefs 无效");
+        for (int findingIndex = 0; findingIndex < findings.size(); findingIndex++) {
+            JsonNode finding = findings.get(findingIndex);
+            String path = "findings[" + findingIndex + "]";
+            requireObject(finding, path + " 必须是对象");
+            requireExactFields(finding, FINDING_FIELDS, path + " 字段不符合 KYC 合约");
+            requireEnum(finding.path("dimension"), DIMENSIONS, path + ".dimension 无效");
+            requireEnum(finding.path("riskLevel"), RISK_LEVELS, path + ".riskLevel 无效");
+            requireText(finding.path("finding"), 800, path + ".finding 无效");
+            JsonNode evidenceRefs = finding.path("evidenceRefs");
+            if (!evidenceRefs.isArray()) {
+                throw new KycOutputValidationException(path + ".evidenceRefs 必须是数组");
             }
-            for (JsonNode evidenceRef : finding.path("evidenceRefs")) {
-                if (!evidenceRef.isTextual() || !allowedEvidence.contains(evidenceRef.asText())) {
-                    throw new KycOutputValidationException("finding 引用了不存在的证据");
+            if (evidenceRefs.size() > 10) {
+                throw new KycOutputValidationException(
+                        path + ".evidenceRefs 最多 10 项，实际 " + evidenceRefs.size() + " 项");
+            }
+            for (int evidenceIndex = 0; evidenceIndex < evidenceRefs.size(); evidenceIndex++) {
+                JsonNode evidenceRef = evidenceRefs.get(evidenceIndex);
+                if (!evidenceRef.isTextual()) {
+                    throw new KycOutputValidationException(
+                            path + ".evidenceRefs[" + evidenceIndex + "] 必须是 SRC-* 文本");
+                }
+                if (!allowedEvidence.contains(evidenceRef.asText())) {
+                    throw new KycOutputValidationException(
+                            path + ".evidenceRefs[" + evidenceIndex + "] 不在允许引用集合中");
                 }
             }
         }

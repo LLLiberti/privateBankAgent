@@ -6,6 +6,7 @@ import com.privatebank.agent.domain.kyc.KycCustomerData;
 import com.privatebank.agent.domain.kyc.KycGenerationException;
 import com.privatebank.agent.domain.kyc.KycGenerationResult;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
+import com.privatebank.agent.domain.kyc.KycOutputValidationException;
 import com.privatebank.agent.domain.kyc.KycStructuredResult;
 import com.privatebank.agent.infrastructure.kyc.KycCustomerDataLoader;
 import com.privatebank.agent.infrastructure.kyc.KycWorkflowStateService;
@@ -44,13 +45,15 @@ class KycWorkflowExecutionServiceTest {
     @Test
     void marksWorkflowFailedWhenBusinessValidationCannotBeRepaired() {
         Fixture fixture = fixture("WF-2", 101L, "EXE-2");
-        when(fixture.executor.execute(any())).thenThrow(new KycGenerationException("格式错误", null));
+        when(fixture.executor.execute(any())).thenThrow(new KycGenerationException(
+                "连续返回不符合业务约束的结果",
+                new KycOutputValidationException("graphAssessment 引用了非 Neo4j 关系证据")));
 
         fixture.service.execute("WF-2");
 
         verify(fixture.stateService).fail(
                 eq(fixture.claim), eq("KYC_OUTPUT_CONTRACT_INVALID"),
-                eq("KYC 分析结果未通过证据、格式或脱敏校验"));
+                eq("KYC 分析结果未通过证据、格式或脱敏校验：graphAssessment 引用了非 Neo4j 关系证据"));
     }
 
     @Test

@@ -7,6 +7,7 @@ import com.privatebank.agent.domain.kyc.KycGenerationException;
 import com.privatebank.agent.domain.kyc.KycGenerationResult;
 import com.privatebank.agent.domain.kyc.KycInputValidationException;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
+import com.privatebank.agent.domain.kyc.KycOutputValidationException;
 import com.privatebank.agent.domain.kyc.KycStructuredResult;
 import com.privatebank.agent.infrastructure.kyc.KycCustomerDataLoader;
 import com.privatebank.agent.infrastructure.kyc.KycWorkflowStateService;
@@ -58,7 +59,11 @@ public class KycWorkflowExecutionService {
             workflowStateService.fail(claim, INPUT_CONTRACT_ERROR, "KYC 脱敏输入未通过出站安全校验");
             return;
         } catch (KycGenerationException exception) {
-            workflowStateService.fail(claim, OUTPUT_CONTRACT_ERROR, "KYC 分析结果未通过证据、格式或脱敏校验");
+            String validationFailure = validationFailure(exception);
+            log.warn("KYC output contract validation failed for workflow {} executionId={}: {}",
+                    workflowId, claim.executionId(), validationFailure);
+            workflowStateService.fail(claim, OUTPUT_CONTRACT_ERROR,
+                    "KYC 分析结果未通过证据、格式或脱敏校验：" + validationFailure);
             return;
         } catch (AgentRuntimeException exception) {
             log.warn("KYC AgentScope execution failed for workflow {} executionId={}: rootCauseType={}",
@@ -79,5 +84,12 @@ public class KycWorkflowExecutionService {
             current = current.getCause();
         }
         return current;
+    }
+
+    private String validationFailure(KycGenerationException exception) {
+        Throwable cause = rootCause(exception);
+        return cause instanceof KycOutputValidationException && cause.getMessage() != null
+                ? cause.getMessage()
+                : "未知输出校验错误";
     }
 }

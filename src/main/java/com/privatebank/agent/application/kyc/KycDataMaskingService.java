@@ -42,7 +42,8 @@ public class KycDataMaskingService {
     private static final Set<String> DIRECT_IDENTIFIER_KEYS = Set.of(
             "fullname", "displayname", "membername", "protectedalias", "enterprisename",
             "organizationname", "counterpartname", "activityname", "partnername", "publishername",
-            "stockcode", "email", "phone", "mobile", "idnumber", "accountnumber", "bankaccount");
+            "stockcode", "email", "phone", "mobile", "idnumber", "accountnumber", "bankaccount",
+            "birthdate", "nativeplace", "birthplace", "residence", "school", "schoolname", "rawtext");
     private static final Set<String> METADATA_KEYS = Set.of(
             "createdat", "updatedat", "createtime", "updatetime", "personid", "customerid", "sourceid");
 
@@ -463,10 +464,10 @@ public class KycDataMaskingService {
             if (DIRECT_IDENTIFIER_KEYS.contains(normalizedField)) {
                 return null;
             }
-            if (normalizedField.contains("address") || normalizedField.contains("headquarters")) {
-                return coarseLocation(text);
-            }
             String sanitized = context.redact(text);
+            if (normalizedField.contains("address") || normalizedField.contains("headquarters")) {
+                return coarseLocation(sanitized);
+            }
             sanitized = EMAIL.matcher(sanitized).replaceAll("[EMAIL_REDACTED]");
             sanitized = PHONE.matcher(sanitized).replaceAll("[PHONE_REDACTED]");
             sanitized = ID_NUMBER.matcher(sanitized).replaceAll("[ID_REDACTED]");
@@ -521,7 +522,9 @@ public class KycDataMaskingService {
     private void collectProhibitedTerms(KycCustomerData data, Set<String> terms) {
         addTerm(terms, data.summary().fullName());
         addTerm(terms, data.summary().displayName());
-        collectTerms(data.profile(), terms, "email", "phone", "mobile", "address", "idNumber");
+        collectTerms(data.profile(), terms,
+                "email", "phone", "mobile", "address", "idNumber",
+                "birthDate", "nativePlace", "birthPlace", "residence", "schoolName");
         collectTerms(data.careers(), terms, "organizationName");
         collectTerms(data.enterpriseRelations(), terms, "enterpriseName", "stockCode", "headquarters");
         collectTerms(data.familyMembers(), terms, "memberName", "protectedAlias");
@@ -853,6 +856,16 @@ public class KycDataMaskingService {
                 sanitized = Pattern.compile(Pattern.quote(entry.getKey()), Pattern.CASE_INSENSITIVE)
                         .matcher(sanitized)
                         .replaceAll(java.util.regex.Matcher.quoteReplacement(entry.getValue()));
+            }
+            List<String> sensitiveTerms = prohibitedTerms.stream()
+                    .filter(term -> term != null && term.trim().length() >= 2)
+                    .map(String::trim)
+                    .sorted((left, right) -> Integer.compare(right.length(), left.length()))
+                    .toList();
+            for (String term : sensitiveTerms) {
+                sanitized = Pattern.compile(Pattern.quote(term), Pattern.CASE_INSENSITIVE)
+                        .matcher(sanitized)
+                        .replaceAll("[SENSITIVE_REDACTED]");
             }
             return sanitized;
         }

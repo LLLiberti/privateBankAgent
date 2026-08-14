@@ -88,7 +88,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class KycDatabaseWorkflowLiveTest {
 
     private static final String NOT_CREATED_WORKFLOW_ID = "NOT_CREATED";
-    private static final long PERSON_ID = 1L;
+    private static final long PERSON_ID = Long.getLong("private-bank.test.person-id", 1L);
     private static final long IMPORT_BATCH_ID = 1L;
     private static final String CUSTOMER_MANAGER_ID = "USER-DEMO-CUSTOMER-MANAGER";
     private static final String API_KEY = configuredProperty("private-bank.agent-runtime.deepseek.api-key", "");
@@ -164,7 +164,7 @@ class KycDatabaseWorkflowLiveTest {
         try {
             timed(workflowId, "VERIFY_LIVE_CUSTOMER", testStartedNanos, () -> {
                 assertThat(customerDataMapper.findSummary(PERSON_ID))
-                        .as("personId=1 must exist in the configured database")
+                        .as("personId=%s must exist in the configured database", PERSON_ID)
                         .isNotNull();
                 return null;
             });
@@ -172,7 +172,7 @@ class KycDatabaseWorkflowLiveTest {
             KycCustomerData rawCustomerData = timed(workflowId, "LOAD_AND_MASK_LOCAL_DATA", testStartedNanos, () -> {
                 KycCustomerData customerData = customerDataLoader.load(PERSON_ID);
                 assertThat(customerData.graphRelationships())
-                        .as("personId=1 must have graph relationships in the configured Neo4j database")
+                        .as("personId=%s must have graph relationships in the configured Neo4j database", PERSON_ID)
                         .isNotEmpty();
                 KycMaskedInput maskedInput = dataMaskingService.mask(customerData);
                 System.out.printf("[KYC agent runtime] phase=MASKING_COMPLETED evidenceRefCount=%d prohibitedTermCount=%d decision=invoke-model-with-masked-input-only%n"
@@ -221,7 +221,8 @@ class KycDatabaseWorkflowLiveTest {
             assertThat(savedResult.path("maskedInputSha256").asText()).isEqualTo(expectedMaskedInput.sha256());
             assertThat(savedResult.path("model").asText()).isEqualTo(MODEL);
             assertThat(initialAnalysis.fieldNames()).toIterable().containsExactlyInAnyOrder(
-                    "riskLevel", "summary", "findings", "riskAlerts", "recommendedActions", "dataGaps");
+                    "riskLevel", "summary", "findings", "riskAlerts", "recommendedActions", "dataGaps",
+                    "graphAssessment");
             for (String prohibitedValue : expectedMaskedInput.prohibitedTerms()) {
                 assertThat(artifact.getResult()).doesNotContain(prohibitedValue);
             }
@@ -446,7 +447,8 @@ class KycDatabaseWorkflowLiveTest {
         assertThat(result.path("maskedInputSha256").asText()).isEqualTo(maskedInput.sha256());
         assertThat(result.path("model").asText()).isEqualTo(MODEL);
         assertThat(analysis.fieldNames()).toIterable().containsExactlyInAnyOrder(
-                "riskLevel", "summary", "findings", "riskAlerts", "recommendedActions", "dataGaps");
+                "riskLevel", "summary", "findings", "riskAlerts", "recommendedActions", "dataGaps",
+                "graphAssessment");
         assertThat(artifact.getResult()).doesNotContain(rawManagerSupplement);
         for (String prohibitedValue : maskedInput.prohibitedTerms()) {
             assertThat(artifact.getResult()).doesNotContain(prohibitedValue);
