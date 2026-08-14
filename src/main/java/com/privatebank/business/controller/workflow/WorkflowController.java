@@ -3,6 +3,7 @@ package com.privatebank.business.controller.workflow;
 import com.privatebank.business.dto.workflow.ArtifactRefResponse;
 import com.privatebank.business.dto.workflow.AvailableImportBatchResponse;
 import com.privatebank.business.dto.workflow.CancelRequest;
+import com.privatebank.business.dto.workflow.CustomerInsightAnalysisResponse;
 import com.privatebank.business.dto.workflow.CustomerManagerWorkflowResponse;
 import com.privatebank.business.dto.workflow.CreateWorkflowRequest;
 import com.privatebank.business.dto.workflow.OutputRetryRequest;
@@ -102,6 +103,13 @@ public class WorkflowController {
             @RequestParam(defaultValue = "1") @Min(1) int pageNo,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int pageSize) {
         return workflowService.artifacts(principal, workflowId, agentType, pageNo, pageSize);
+    }
+
+    @GetMapping("/{workflowId}/customer-insight")
+    public CustomerInsightAnalysisResponse customerInsight(
+            @AuthenticationPrincipal CurrentUserPrincipal principal,
+            @PathVariable String workflowId) {
+        return workflowService.customerInsight(principal, workflowId);
     }
 
     @PostMapping("/{workflowId}/inputs")

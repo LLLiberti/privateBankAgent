@@ -18,6 +18,7 @@ import com.privatebank.business.dto.workflow.AgentStateResponse;
 import com.privatebank.business.dto.workflow.ArtifactRefResponse;
 import com.privatebank.business.dto.workflow.AvailableImportBatchResponse;
 import com.privatebank.business.dto.workflow.CancelRequest;
+import com.privatebank.business.dto.workflow.CustomerInsightAnalysisResponse;
 import com.privatebank.business.dto.workflow.CustomerManagerWorkflowResponse;
 import com.privatebank.business.dto.workflow.CreateWorkflowRequest;
 import com.privatebank.business.dto.workflow.OutputRetryRequest;
@@ -181,6 +182,32 @@ public class WorkflowService {
         Page<AgentArtifact> page = artifactMapper.selectPage(new Page<>(pageNo, pageSize), query);
         return PageResponse.of(page.getRecords().stream().map(ArtifactRefResponse::from).toList(),
                 page.getTotal(), pageNo, pageSize);
+    }
+
+    @Transactional(readOnly = true)
+    public CustomerInsightAnalysisResponse customerInsight(CurrentUserPrincipal principal, String workflowId) {
+        WorkflowState workflow = requireAccessible(principal, workflowId);
+        AgentArtifact artifact = latestCustomerInsightArtifact(workflowId);
+        if (artifact == null) {
+            throw notFound("客户洞察结果尚未生成");
+        }
+        AgentState state = agentStateMapper.selectOne(Wrappers.<AgentState>lambdaQuery()
+                .eq(AgentState::getWorkflowId, workflowId)
+                .eq(AgentState::getAgentType, AgentType.CUSTOMER_INSIGHT));
+        if (state == null) {
+            throw notFound("客户洞察状态不存在");
+        }
+        return new CustomerInsightAnalysisResponse(
+                workflowId,
+                workflow.getWorkflowStatus(),
+                state.getAgentStatus(),
+                artifact.getArtifactId(),
+                artifact.getExecutionId(),
+                artifact.getVersion(),
+                artifact.getCreateTime(),
+                workflow.getWorkflowStatus() == WorkflowStatus.WAITING_INPUT
+                        && state.getAgentStatus() == AgentStatus.SUCCESS,
+                parseCustomerInsightAnalysis(artifact));
     }
 
     @Transactional
@@ -395,16 +422,41 @@ public class WorkflowService {
 
     private AgentArtifact requireCurrentKycArtifact(String workflowId, String artifactId) {
         AgentArtifact current = requireArtifact(workflowId, artifactId, AgentType.CUSTOMER_INSIGHT);
-        AgentArtifact latest = artifactMapper.selectOne(Wrappers.<AgentArtifact>lambdaQuery()
-                .eq(AgentArtifact::getWorkflowId, workflowId)
-                .eq(AgentArtifact::getAgentType, AgentType.CUSTOMER_INSIGHT)
-                .orderByDesc(AgentArtifact::getVersion)
-                .last("LIMIT 1"));
+        AgentArtifact latest = latestCustomerInsightArtifact(workflowId);
         if (latest == null || !current.getArtifactId().equals(latest.getArtifactId())) {
             throw new BusinessException(HttpStatus.CONFLICT, ErrorCode.STALE_ARTIFACT,
                     "当前KYC结果不是该工作流的最新版本，请刷新后重新审核");
         }
         return current;
+    }
+
+    private AgentArtifact latestCustomerInsightArtifact(String workflowId) {
+        return artifactMapper.selectOne(Wrappers.<AgentArtifact>lambdaQuery()
+                .eq(AgentArtifact::getWorkflowId, workflowId)
+                .eq(AgentArtifact::getAgentType, AgentType.CUSTOMER_INSIGHT)
+                .orderByDesc(AgentArtifact::getVersion)
+                .last("LIMIT 1"));
+    }
+
+    private CustomerInsightAnalysisResponse.Analysis parseCustomerInsightAnalysis(AgentArtifact artifact) {
+        if (!StringUtils.hasText(artifact.getResult())) {
+            throw invalidCustomerInsightArtifact();
+        }
+        try {
+            JsonNode result = objectMapper.readTree(artifact.getResult());
+            JsonNode analysis = result.path("analysis");
+            if (!"kyc-result.v2".equals(result.path("contractVersion").asText()) || !analysis.isObject()) {
+                throw invalidCustomerInsightArtifact();
+            }
+            return objectMapper.treeToValue(analysis, CustomerInsightAnalysisResponse.Analysis.class);
+        } catch (JsonProcessingException exception) {
+            throw invalidCustomerInsightArtifact();
+        }
+    }
+
+    private BusinessException invalidCustomerInsightArtifact() {
+        return new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR, ErrorCode.INTERNAL_ERROR,
+                "客户洞察结果格式无效");
     }
 
     private void requireSupplementForSupplementAction(WorkflowInputRequest request) {
