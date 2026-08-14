@@ -221,7 +221,8 @@ class KycDatabaseWorkflowLiveTest {
             assertThat(savedResult.path("maskedInputSha256").asText()).isEqualTo(expectedMaskedInput.sha256());
             assertThat(savedResult.path("model").asText()).isEqualTo(MODEL);
             assertThat(initialAnalysis.fieldNames()).toIterable().containsExactlyInAnyOrder(
-                    "riskLevel", "summary", "findings", "riskAlerts", "recommendedActions", "dataGaps");
+                    "riskLevel", "summary", "findings", "riskAlerts", "recommendedActions", "dataGaps",
+                    "graphAssessment");
             for (String prohibitedValue : expectedMaskedInput.prohibitedTerms()) {
                 assertThat(artifact.getResult()).doesNotContain(prohibitedValue);
             }
@@ -446,7 +447,8 @@ class KycDatabaseWorkflowLiveTest {
         assertThat(result.path("maskedInputSha256").asText()).isEqualTo(maskedInput.sha256());
         assertThat(result.path("model").asText()).isEqualTo(MODEL);
         assertThat(analysis.fieldNames()).toIterable().containsExactlyInAnyOrder(
-                "riskLevel", "summary", "findings", "riskAlerts", "recommendedActions", "dataGaps");
+                "riskLevel", "summary", "findings", "riskAlerts", "recommendedActions", "dataGaps",
+                "graphAssessment");
         assertThat(artifact.getResult()).doesNotContain(rawManagerSupplement);
         for (String prohibitedValue : maskedInput.prohibitedTerms()) {
             assertThat(artifact.getResult()).doesNotContain(prohibitedValue);
