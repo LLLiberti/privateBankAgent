@@ -7,6 +7,7 @@ import com.privatebank.business.common.exception.BusinessException;
 import com.privatebank.business.common.exception.ErrorCode;
 import com.privatebank.business.dto.customer.CustomerSummaryResponse;
 import com.privatebank.business.dto.workflow.AvailableImportBatchResponse;
+import com.privatebank.business.dto.workflow.CustomerInsightAnalysisResponse;
 import com.privatebank.business.dto.workflow.CustomerManagerWorkflowResponse;
 import com.privatebank.business.dto.workflow.CreateWorkflowRequest;
 import com.privatebank.business.dto.workflow.WorkflowInputRequest;
@@ -31,6 +32,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -92,6 +94,36 @@ class WorkflowServiceKycReviewTest {
 
         assertThat(response.items()).containsExactly(workflow);
         assertThat(response.total()).isEqualTo(1);
+    }
+
+    @Test
+    void returnsLatestCustomerInsightAnalysis() {
+        Fixture fixture = fixture();
+        WorkflowState workflow = workflow();
+        AgentArtifact artifact = kycArtifact("ART-2", 2);
+        artifact.setExecutionId("EXE-2");
+        artifact.setCreateTime(LocalDateTime.of(2026, 8, 14, 15, 30));
+        artifact.setResult("""
+                {"contractVersion":"kyc-result.v2","analysis":{
+                  "riskLevel":"MEDIUM","summary":"客户风险概述","findings":[{
+                    "dimension":"PERSON","riskLevel":"MEDIUM","finding":"风险事实","evidenceRefs":["SRC-1"]
+                  }],"riskAlerts":["风险提示"],"recommendedActions":["建议动作"],"dataGaps":["待补充信息"],
+                  "graphAssessment":{"contribution":"CONFIRMATORY","summary":"图谱印证","evidenceRefs":["SRC-2"]}
+                }}""");
+        AgentState state = agentState(AgentType.CUSTOMER_INSIGHT, AgentStatus.SUCCESS);
+        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
+        when(fixture.artifactMapper.selectOne(anyArtifactQuery())).thenReturn(artifact);
+        when(fixture.agentStateMapper.selectOne(anyAgentStateQuery())).thenReturn(state);
+
+        CustomerInsightAnalysisResponse response = fixture.service.customerInsight(principal(), "WF-1");
+
+        assertThat(response.artifactId()).isEqualTo("ART-2");
+        assertThat(response.version()).isEqualTo(2);
+        assertThat(response.actionable()).isTrue();
+        assertThat(response.analysis().riskLevel()).isEqualTo("MEDIUM");
+        assertThat(response.analysis().findings()).singleElement()
+                .extracting(CustomerInsightAnalysisResponse.Finding::evidenceRefs)
+                .isEqualTo(List.of("SRC-1"));
     }
 
     @Test
