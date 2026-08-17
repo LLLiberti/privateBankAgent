@@ -205,14 +205,52 @@ class WorkflowServiceKycReviewTest {
     }
 
     @Test
-    void rejectsCustomerInsightRetryForNonModelFailure() {
+    void retriesCustomerInsightAfterOutputContractFailure() {
         Fixture fixture = fixture();
         WorkflowState workflow = workflow();
         workflow.setWorkflowStatus(WorkflowStatus.FAILED);
         workflow.setErrorCode("KYC_OUTPUT_CONTRACT_INVALID");
+        workflow.setErrorMessage("KYC 分析结果未通过证据、格式或脱敏校验");
+        workflow.setFinishTime(LocalDateTime.now());
         AgentState kycState = agentState(AgentType.CUSTOMER_INSIGHT, AgentStatus.FAILED);
         kycState.setExecutionId("EXE-FAILED");
         kycState.setErrorCode("KYC_OUTPUT_CONTRACT_INVALID");
+        kycState.setErrorMessage("KYC 分析结果未通过证据、格式或脱敏校验");
+        kycState.setStartTime(LocalDateTime.now().minusMinutes(1));
+        kycState.setFinishTime(LocalDateTime.now());
+        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
+        when(fixture.agentStateMapper.selectOne(anyAgentStateQuery())).thenReturn(kycState);
+        when(fixture.agentStateMapper.updateById(any(AgentState.class))).thenReturn(1);
+        when(fixture.workflowMapper.updateById(any(WorkflowState.class))).thenReturn(1);
+        when(fixture.agentStateMapper.selectList(anyAgentStateQuery())).thenReturn(List.of(kycState));
+
+        var response = fixture.service.retryCustomerInsight(principal(), "WF-1", "retry-key",
+                new CustomerInsightRetryRequest("EXE-FAILED"));
+
+        assertThat(response.workflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
+        assertThat(workflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
+        assertThat(workflow.getErrorCode()).isNull();
+        assertThat(workflow.getErrorMessage()).isNull();
+        assertThat(workflow.getFinishTime()).isNull();
+        assertThat(kycState.getAgentStatus()).isEqualTo(AgentStatus.READY);
+        assertThat(kycState.getExecutionId()).startsWith("EXE-").isNotEqualTo("EXE-FAILED");
+        assertThat(kycState.getErrorCode()).isNull();
+        assertThat(kycState.getErrorMessage()).isNull();
+        assertThat(kycState.getStartTime()).isNull();
+        assertThat(kycState.getFinishTime()).isNull();
+        verify(fixture.eventPublisher).publishEvent(
+                new KycRegenerationRequestedEvent("WF-1", null, List.of()));
+    }
+
+    @Test
+    void rejectsCustomerInsightRetryForNonRetryableFailure() {
+        Fixture fixture = fixture();
+        WorkflowState workflow = workflow();
+        workflow.setWorkflowStatus(WorkflowStatus.FAILED);
+        workflow.setErrorCode("KYC_MASKED_INPUT_INVALID");
+        AgentState kycState = agentState(AgentType.CUSTOMER_INSIGHT, AgentStatus.FAILED);
+        kycState.setExecutionId("EXE-FAILED");
+        kycState.setErrorCode("KYC_MASKED_INPUT_INVALID");
         when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
         when(fixture.agentStateMapper.selectOne(anyAgentStateQuery())).thenReturn(kycState);
 

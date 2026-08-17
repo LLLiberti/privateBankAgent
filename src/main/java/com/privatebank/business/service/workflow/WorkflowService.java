@@ -60,13 +60,16 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
 public class WorkflowService {
 
-    private static final String KYC_MODEL_CALL_FAILED = "KYC_MODEL_CALL_FAILED";
+    private static final Set<String> RETRYABLE_CUSTOMER_INSIGHT_FAILURES = Set.of(
+            "KYC_MODEL_CALL_FAILED",
+            "KYC_OUTPUT_CONTRACT_INVALID");
 
     private final WorkflowStateMapper workflowMapper;
     private final AgentStateMapper agentStateMapper;
@@ -232,7 +235,7 @@ public class WorkflowService {
         if (workflow.getWorkflowStatus() != WorkflowStatus.FAILED) {
             throw conflict("当前工作流不是失败状态，不能重试客户洞察");
         }
-        if (!KYC_MODEL_CALL_FAILED.equals(workflow.getErrorCode())) {
+        if (!RETRYABLE_CUSTOMER_INSIGHT_FAILURES.contains(workflow.getErrorCode())) {
             throw conflict("当前工作流失败类型不支持重试客户洞察");
         }
         AgentState state = agentStateMapper.selectOne(Wrappers.<AgentState>lambdaQuery()
@@ -244,7 +247,7 @@ public class WorkflowService {
         if (state.getAgentStatus() != AgentStatus.FAILED) {
             throw conflict("客户洞察不是失败状态，不能重试");
         }
-        if (!KYC_MODEL_CALL_FAILED.equals(state.getErrorCode())) {
+        if (!RETRYABLE_CUSTOMER_INSIGHT_FAILURES.contains(state.getErrorCode())) {
             throw conflict("当前客户洞察失败类型不支持重试");
         }
         if (!request.failedExecutionId().equals(state.getExecutionId())) {
