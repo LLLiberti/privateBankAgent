@@ -34,14 +34,17 @@ public class AgentScopeExecutionEngine implements StructuredAgentRuntime {
     public <I, O> AgentExecutionResult<O> execute(
             AgentExecutionRequest<I> request,
             StructuredAgentDefinition<O> definition) {
-        ReActAgent agent = ReActAgent.builder()
+        var builder = ReActAgent.builder()
                 .name(definition.name())
                 .sysPrompt(definition.systemPrompt())
                 .model(privateBankAgentModel)
                 .maxRetries(Math.max(0, properties.maxModelRetries()))
                 .maxIters(Math.max(1, definition.maxIterations()))
-                .middleware(new AgentScopeProgressMiddleware(request, progressPublisher))
-                .build();
+                .middleware(new AgentScopeProgressMiddleware(request, progressPublisher));
+        if (definition.toolkit() != null) {
+            builder.toolkit(definition.toolkit());
+        }
+        ReActAgent agent = builder.build();
         try {
             Msg result = agent.call(
                             List.of(new UserMessage(definition.userPrompt())),

@@ -60,7 +60,8 @@ public class KycAgentExecutor implements BusinessAgentExecutor<KycMaskedInput, K
                     SYSTEM_PROMPT,
                     userPrompt(request.input(), lastValidationError),
                     KycStructuredResult.class,
-                    Math.max(1, properties.maxIterations()));
+                    Math.max(1, properties.maxIterations()),
+                    null);
             AgentExecutionResult<KycStructuredResult> runtimeResult = runtime.execute(request, definition);
             try {
                 String validated = outputValidator.validate(serialize(runtimeResult.output()), request.input());
