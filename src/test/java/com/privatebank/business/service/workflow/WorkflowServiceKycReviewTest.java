@@ -8,6 +8,7 @@ import com.privatebank.business.common.exception.ErrorCode;
 import com.privatebank.business.dto.customer.CustomerSummaryResponse;
 import com.privatebank.business.dto.workflow.AvailableImportBatchResponse;
 import com.privatebank.business.dto.workflow.CustomerInsightAnalysisResponse;
+import com.privatebank.business.dto.workflow.CustomerInsightRetryRequest;
 import com.privatebank.business.dto.workflow.CustomerManagerWorkflowResponse;
 import com.privatebank.business.dto.workflow.CreateWorkflowRequest;
 import com.privatebank.business.dto.workflow.WorkflowInputRequest;
@@ -104,11 +105,13 @@ class WorkflowServiceKycReviewTest {
         artifact.setExecutionId("EXE-2");
         artifact.setCreateTime(LocalDateTime.of(2026, 8, 14, 15, 30));
         artifact.setResult("""
-                {"contractVersion":"kyc-result.v2","analysis":{
-                  "riskLevel":"MEDIUM","summary":"客户风险概述","findings":[{
-                    "dimension":"PERSON","riskLevel":"MEDIUM","finding":"风险事实","evidenceRefs":["SRC-1"]
-                  }],"riskAlerts":["风险提示"],"recommendedActions":["建议动作"],"dataGaps":["待补充信息"],
-                  "graphAssessment":{"contribution":"CONFIRMATORY","summary":"图谱印证","evidenceRefs":["SRC-2"]}
+                {"contractVersion":"kyc-result.v2","aliasMappings":{
+                  "P-1":"张三","E-1":"某某科技有限公司"
+                },"analysis":{
+                  "riskLevel":"MEDIUM","summary":"客户P-1关联E-1","findings":[{
+                    "dimension":"PERSON","riskLevel":"MEDIUM","finding":"P-1存在风险","evidenceRefs":["SRC-1"]
+                  }],"riskAlerts":["E-1风险提示"],"recommendedActions":["联系P-1"],"dataGaps":["缺少E-1信息"],
+                  "graphAssessment":{"contribution":"CONFIRMATORY","summary":"P-1与E-1图谱印证","evidenceRefs":["SRC-2"]}
                 }}""");
         AgentState state = agentState(AgentType.CUSTOMER_INSIGHT, AgentStatus.SUCCESS);
         when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
@@ -121,9 +124,17 @@ class WorkflowServiceKycReviewTest {
         assertThat(response.version()).isEqualTo(2);
         assertThat(response.actionable()).isTrue();
         assertThat(response.analysis().riskLevel()).isEqualTo("MEDIUM");
+        assertThat(response.analysis().summary()).isEqualTo("客户张三关联某某科技有限公司");
+        assertThat(response.analysis().findings().getFirst().finding()).isEqualTo("张三存在风险");
+        assertThat(response.analysis().riskAlerts()).containsExactly("某某科技有限公司风险提示");
+        assertThat(response.analysis().recommendedActions()).containsExactly("联系张三");
+        assertThat(response.analysis().dataGaps()).containsExactly("缺少某某科技有限公司信息");
+        assertThat(response.analysis().graphAssessment().summary())
+                .isEqualTo("张三与某某科技有限公司图谱印证");
         assertThat(response.analysis().findings()).singleElement()
                 .extracting(CustomerInsightAnalysisResponse.Finding::evidenceRefs)
                 .isEqualTo(List.of("SRC-1"));
+        assertThat(artifact.getResult()).contains("P-1存在风险", "E-1风险提示");
     }
 
     @Test
@@ -153,6 +164,129 @@ class WorkflowServiceKycReviewTest {
                 "WF-1", "请补充客户近期流动性安排", List.of("近期流动性安排")));
         verify(fixture.artifactMapper, never()).insert(any(AgentArtifact.class));
         verify(fixture.eventPublisher, never()).publishEvent(any(DownstreamAgentsReadyEvent.class));
+    }
+
+    @Test
+    void retriesCustomerInsightAfterModelCallFailure() {
+        Fixture fixture = fixture();
+        WorkflowState workflow = workflow();
+        workflow.setWorkflowStatus(WorkflowStatus.FAILED);
+        workflow.setErrorCode("KYC_MODEL_CALL_FAILED");
+        workflow.setErrorMessage("KYC 模型调用失败，请稍后重试");
+        workflow.setFinishTime(LocalDateTime.now());
+        AgentState kycState = agentState(AgentType.CUSTOMER_INSIGHT, AgentStatus.FAILED);
+        kycState.setExecutionId("EXE-FAILED");
+        kycState.setErrorCode("KYC_MODEL_CALL_FAILED");
+        kycState.setErrorMessage("KYC 模型调用失败，请稍后重试");
+        kycState.setStartTime(LocalDateTime.now().minusMinutes(1));
+        kycState.setFinishTime(LocalDateTime.now());
+        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
+        when(fixture.agentStateMapper.selectOne(anyAgentStateQuery())).thenReturn(kycState);
+        when(fixture.agentStateMapper.updateById(any(AgentState.class))).thenReturn(1);
+        when(fixture.workflowMapper.updateById(any(WorkflowState.class))).thenReturn(1);
+        when(fixture.agentStateMapper.selectList(anyAgentStateQuery())).thenReturn(List.of(kycState));
+
+        var response = fixture.service.retryCustomerInsight(principal(), "WF-1", "retry-key",
+                new CustomerInsightRetryRequest("EXE-FAILED"));
+
+        assertThat(response.workflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
+        assertThat(workflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
+        assertThat(workflow.getErrorCode()).isNull();
+        assertThat(workflow.getErrorMessage()).isNull();
+        assertThat(workflow.getFinishTime()).isNull();
+        assertThat(kycState.getAgentStatus()).isEqualTo(AgentStatus.READY);
+        assertThat(kycState.getExecutionId()).startsWith("EXE-").isNotEqualTo("EXE-FAILED");
+        assertThat(kycState.getErrorCode()).isNull();
+        assertThat(kycState.getErrorMessage()).isNull();
+        assertThat(kycState.getStartTime()).isNull();
+        assertThat(kycState.getFinishTime()).isNull();
+        verify(fixture.eventPublisher).publishEvent(
+                new KycRegenerationRequestedEvent("WF-1", null, List.of()));
+    }
+
+    @Test
+    void retriesCustomerInsightAfterOutputContractFailure() {
+        Fixture fixture = fixture();
+        WorkflowState workflow = workflow();
+        workflow.setWorkflowStatus(WorkflowStatus.FAILED);
+        workflow.setErrorCode("KYC_OUTPUT_CONTRACT_INVALID");
+        workflow.setErrorMessage("KYC 分析结果未通过证据、格式或脱敏校验");
+        workflow.setFinishTime(LocalDateTime.now());
+        AgentState kycState = agentState(AgentType.CUSTOMER_INSIGHT, AgentStatus.FAILED);
+        kycState.setExecutionId("EXE-FAILED");
+        kycState.setErrorCode("KYC_OUTPUT_CONTRACT_INVALID");
+        kycState.setErrorMessage("KYC 分析结果未通过证据、格式或脱敏校验");
+        kycState.setStartTime(LocalDateTime.now().minusMinutes(1));
+        kycState.setFinishTime(LocalDateTime.now());
+        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
+        when(fixture.agentStateMapper.selectOne(anyAgentStateQuery())).thenReturn(kycState);
+        when(fixture.agentStateMapper.updateById(any(AgentState.class))).thenReturn(1);
+        when(fixture.workflowMapper.updateById(any(WorkflowState.class))).thenReturn(1);
+        when(fixture.agentStateMapper.selectList(anyAgentStateQuery())).thenReturn(List.of(kycState));
+
+        var response = fixture.service.retryCustomerInsight(principal(), "WF-1", "retry-key",
+                new CustomerInsightRetryRequest("EXE-FAILED"));
+
+        assertThat(response.workflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
+        assertThat(workflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
+        assertThat(workflow.getErrorCode()).isNull();
+        assertThat(workflow.getErrorMessage()).isNull();
+        assertThat(workflow.getFinishTime()).isNull();
+        assertThat(kycState.getAgentStatus()).isEqualTo(AgentStatus.READY);
+        assertThat(kycState.getExecutionId()).startsWith("EXE-").isNotEqualTo("EXE-FAILED");
+        assertThat(kycState.getErrorCode()).isNull();
+        assertThat(kycState.getErrorMessage()).isNull();
+        assertThat(kycState.getStartTime()).isNull();
+        assertThat(kycState.getFinishTime()).isNull();
+        verify(fixture.eventPublisher).publishEvent(
+                new KycRegenerationRequestedEvent("WF-1", null, List.of()));
+    }
+
+    @Test
+    void rejectsCustomerInsightRetryForNonRetryableFailure() {
+        Fixture fixture = fixture();
+        WorkflowState workflow = workflow();
+        workflow.setWorkflowStatus(WorkflowStatus.FAILED);
+        workflow.setErrorCode("KYC_MASKED_INPUT_INVALID");
+        AgentState kycState = agentState(AgentType.CUSTOMER_INSIGHT, AgentStatus.FAILED);
+        kycState.setExecutionId("EXE-FAILED");
+        kycState.setErrorCode("KYC_MASKED_INPUT_INVALID");
+        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
+        when(fixture.agentStateMapper.selectOne(anyAgentStateQuery())).thenReturn(kycState);
+
+        assertThatThrownBy(() -> fixture.service.retryCustomerInsight(principal(), "WF-1", "retry-key",
+                new CustomerInsightRetryRequest("EXE-FAILED")))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> {
+                    BusinessException exception = (BusinessException) error;
+                    assertThat(exception.getStatus().value()).isEqualTo(409);
+                    assertThat(exception.getCode()).isEqualTo(ErrorCode.STATE_CONFLICT);
+                });
+
+        verify(fixture.agentStateMapper, never()).updateById(any(AgentState.class));
+        verify(fixture.workflowMapper, never()).updateById(any(WorkflowState.class));
+        verify(fixture.eventPublisher, never()).publishEvent(any(KycRegenerationRequestedEvent.class));
+    }
+
+    @Test
+    void rejectsCustomerInsightRetryForStaleFailedExecution() {
+        Fixture fixture = fixture();
+        WorkflowState workflow = workflow();
+        workflow.setWorkflowStatus(WorkflowStatus.FAILED);
+        workflow.setErrorCode("KYC_MODEL_CALL_FAILED");
+        AgentState kycState = agentState(AgentType.CUSTOMER_INSIGHT, AgentStatus.FAILED);
+        kycState.setExecutionId("EXE-CURRENT");
+        kycState.setErrorCode("KYC_MODEL_CALL_FAILED");
+        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
+        when(fixture.agentStateMapper.selectOne(anyAgentStateQuery())).thenReturn(kycState);
+
+        assertThatThrownBy(() -> fixture.service.retryCustomerInsight(principal(), "WF-1", "retry-key",
+                new CustomerInsightRetryRequest("EXE-STALE")))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已变化");
+
+        verify(fixture.agentStateMapper, never()).updateById(any(AgentState.class));
+        verify(fixture.workflowMapper, never()).updateById(any(WorkflowState.class));
     }
 
     @Test
@@ -257,7 +391,8 @@ class WorkflowServiceKycReviewTest {
                 mock(WorkflowEventHub.class),
                 eventPublisher,
                 new ObjectMapper().findAndRegisterModules(),
-                mock(FileStorageService.class));
+                mock(FileStorageService.class),
+                new CustomerInsightAliasRestorer());
         return new Fixture(service, workflowMapper, agentStateMapper, artifactMapper, eventPublisher,
                 customerDataMapper, importBatchMapper);
     }

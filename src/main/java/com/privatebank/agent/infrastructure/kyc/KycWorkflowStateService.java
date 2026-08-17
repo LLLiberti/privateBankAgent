@@ -158,6 +158,7 @@ public class KycWorkflowStateService {
                     "maskingApplied", true,
                     "maskedInputSha256", input.sha256(),
                     "evidenceReferences", input.evidenceReferences(),
+                    "aliasMappings", input.aliasMappings(),
                     "analysis", analysis));
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("KYC 分析结果无法保存", exception);

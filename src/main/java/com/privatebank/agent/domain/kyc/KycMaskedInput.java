@@ -14,12 +14,22 @@ public record KycMaskedInput(
         Map<String, Object> payload,
         Map<String, Long> evidenceReferences,
         Set<String> prohibitedTerms,
+        Map<String, String> aliasMappings,
         String sha256) {
 
     public KycMaskedInput {
         payload = freezeMap(payload);
         evidenceReferences = Collections.unmodifiableMap(new LinkedHashMap<>(evidenceReferences));
         prohibitedTerms = Collections.unmodifiableSet(new LinkedHashSet<>(prohibitedTerms));
+        aliasMappings = Collections.unmodifiableMap(new LinkedHashMap<>(aliasMappings));
+    }
+
+    public KycMaskedInput(
+            Map<String, Object> payload,
+            Map<String, Long> evidenceReferences,
+            Set<String> prohibitedTerms,
+            String sha256) {
+        this(payload, evidenceReferences, prohibitedTerms, Map.of(), sha256);
     }
 
     private static Map<String, Object> freezeMap(Map<String, ?> source) {
