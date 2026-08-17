@@ -8,6 +8,7 @@ import com.privatebank.business.common.exception.ErrorCode;
 import com.privatebank.business.dto.customer.CustomerSummaryResponse;
 import com.privatebank.business.dto.workflow.AvailableImportBatchResponse;
 import com.privatebank.business.dto.workflow.CustomerInsightAnalysisResponse;
+import com.privatebank.business.dto.workflow.CustomerInsightRetryRequest;
 import com.privatebank.business.dto.workflow.CustomerManagerWorkflowResponse;
 import com.privatebank.business.dto.workflow.CreateWorkflowRequest;
 import com.privatebank.business.dto.workflow.WorkflowInputRequest;
@@ -163,6 +164,91 @@ class WorkflowServiceKycReviewTest {
                 "WF-1", "请补充客户近期流动性安排", List.of("近期流动性安排")));
         verify(fixture.artifactMapper, never()).insert(any(AgentArtifact.class));
         verify(fixture.eventPublisher, never()).publishEvent(any(DownstreamAgentsReadyEvent.class));
+    }
+
+    @Test
+    void retriesCustomerInsightAfterModelCallFailure() {
+        Fixture fixture = fixture();
+        WorkflowState workflow = workflow();
+        workflow.setWorkflowStatus(WorkflowStatus.FAILED);
+        workflow.setErrorCode("KYC_MODEL_CALL_FAILED");
+        workflow.setErrorMessage("KYC 模型调用失败，请稍后重试");
+        workflow.setFinishTime(LocalDateTime.now());
+        AgentState kycState = agentState(AgentType.CUSTOMER_INSIGHT, AgentStatus.FAILED);
+        kycState.setExecutionId("EXE-FAILED");
+        kycState.setErrorCode("KYC_MODEL_CALL_FAILED");
+        kycState.setErrorMessage("KYC 模型调用失败，请稍后重试");
+        kycState.setStartTime(LocalDateTime.now().minusMinutes(1));
+        kycState.setFinishTime(LocalDateTime.now());
+        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
+        when(fixture.agentStateMapper.selectOne(anyAgentStateQuery())).thenReturn(kycState);
+        when(fixture.agentStateMapper.updateById(any(AgentState.class))).thenReturn(1);
+        when(fixture.workflowMapper.updateById(any(WorkflowState.class))).thenReturn(1);
+        when(fixture.agentStateMapper.selectList(anyAgentStateQuery())).thenReturn(List.of(kycState));
+
+        var response = fixture.service.retryCustomerInsight(principal(), "WF-1", "retry-key",
+                new CustomerInsightRetryRequest("EXE-FAILED"));
+
+        assertThat(response.workflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
+        assertThat(workflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
+        assertThat(workflow.getErrorCode()).isNull();
+        assertThat(workflow.getErrorMessage()).isNull();
+        assertThat(workflow.getFinishTime()).isNull();
+        assertThat(kycState.getAgentStatus()).isEqualTo(AgentStatus.READY);
+        assertThat(kycState.getExecutionId()).startsWith("EXE-").isNotEqualTo("EXE-FAILED");
+        assertThat(kycState.getErrorCode()).isNull();
+        assertThat(kycState.getErrorMessage()).isNull();
+        assertThat(kycState.getStartTime()).isNull();
+        assertThat(kycState.getFinishTime()).isNull();
+        verify(fixture.eventPublisher).publishEvent(
+                new KycRegenerationRequestedEvent("WF-1", null, List.of()));
+    }
+
+    @Test
+    void rejectsCustomerInsightRetryForNonModelFailure() {
+        Fixture fixture = fixture();
+        WorkflowState workflow = workflow();
+        workflow.setWorkflowStatus(WorkflowStatus.FAILED);
+        workflow.setErrorCode("KYC_OUTPUT_CONTRACT_INVALID");
+        AgentState kycState = agentState(AgentType.CUSTOMER_INSIGHT, AgentStatus.FAILED);
+        kycState.setExecutionId("EXE-FAILED");
+        kycState.setErrorCode("KYC_OUTPUT_CONTRACT_INVALID");
+        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
+        when(fixture.agentStateMapper.selectOne(anyAgentStateQuery())).thenReturn(kycState);
+
+        assertThatThrownBy(() -> fixture.service.retryCustomerInsight(principal(), "WF-1", "retry-key",
+                new CustomerInsightRetryRequest("EXE-FAILED")))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(error -> {
+                    BusinessException exception = (BusinessException) error;
+                    assertThat(exception.getStatus().value()).isEqualTo(409);
+                    assertThat(exception.getCode()).isEqualTo(ErrorCode.STATE_CONFLICT);
+                });
+
+        verify(fixture.agentStateMapper, never()).updateById(any(AgentState.class));
+        verify(fixture.workflowMapper, never()).updateById(any(WorkflowState.class));
+        verify(fixture.eventPublisher, never()).publishEvent(any(KycRegenerationRequestedEvent.class));
+    }
+
+    @Test
+    void rejectsCustomerInsightRetryForStaleFailedExecution() {
+        Fixture fixture = fixture();
+        WorkflowState workflow = workflow();
+        workflow.setWorkflowStatus(WorkflowStatus.FAILED);
+        workflow.setErrorCode("KYC_MODEL_CALL_FAILED");
+        AgentState kycState = agentState(AgentType.CUSTOMER_INSIGHT, AgentStatus.FAILED);
+        kycState.setExecutionId("EXE-CURRENT");
+        kycState.setErrorCode("KYC_MODEL_CALL_FAILED");
+        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
+        when(fixture.agentStateMapper.selectOne(anyAgentStateQuery())).thenReturn(kycState);
+
+        assertThatThrownBy(() -> fixture.service.retryCustomerInsight(principal(), "WF-1", "retry-key",
+                new CustomerInsightRetryRequest("EXE-STALE")))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已变化");
+
+        verify(fixture.agentStateMapper, never()).updateById(any(AgentState.class));
+        verify(fixture.workflowMapper, never()).updateById(any(WorkflowState.class));
     }
 
     @Test

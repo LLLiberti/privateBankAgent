@@ -19,6 +19,7 @@ import com.privatebank.business.dto.workflow.ArtifactRefResponse;
 import com.privatebank.business.dto.workflow.AvailableImportBatchResponse;
 import com.privatebank.business.dto.workflow.CancelRequest;
 import com.privatebank.business.dto.workflow.CustomerInsightAnalysisResponse;
+import com.privatebank.business.dto.workflow.CustomerInsightRetryRequest;
 import com.privatebank.business.dto.workflow.CustomerManagerWorkflowResponse;
 import com.privatebank.business.dto.workflow.CreateWorkflowRequest;
 import com.privatebank.business.dto.workflow.OutputRetryRequest;
@@ -64,6 +65,8 @@ import java.util.UUID;
 @Service
 @RequiredArgsConstructor
 public class WorkflowService {
+
+    private static final String KYC_MODEL_CALL_FAILED = "KYC_MODEL_CALL_FAILED";
 
     private final WorkflowStateMapper workflowMapper;
     private final AgentStateMapper agentStateMapper;
@@ -209,6 +212,71 @@ public class WorkflowService {
                 workflow.getWorkflowStatus() == WorkflowStatus.WAITING_INPUT
                         && state.getAgentStatus() == AgentStatus.SUCCESS,
                 parseCustomerInsightAnalysis(artifact));
+    }
+
+    @Transactional
+    public WorkflowDetailResponse retryCustomerInsight(
+            CurrentUserPrincipal principal,
+            String workflowId,
+            String idempotencyKey,
+            CustomerInsightRetryRequest request) {
+        String key = principal.userId() + ":workflow:customer-insight-retry:" + workflowId + ":"
+                + request.failedExecutionId() + ":" + idempotencyKey;
+        return idempotencyExecutor.execute(key,
+                () -> retryCustomerInsightOnce(principal, workflowId, request));
+    }
+
+    private WorkflowDetailResponse retryCustomerInsightOnce(
+            CurrentUserPrincipal principal, String workflowId, CustomerInsightRetryRequest request) {
+        WorkflowState workflow = requireAccessible(principal, workflowId);
+        if (workflow.getWorkflowStatus() != WorkflowStatus.FAILED) {
+            throw conflict("当前工作流不是失败状态，不能重试客户洞察");
+        }
+        if (!KYC_MODEL_CALL_FAILED.equals(workflow.getErrorCode())) {
+            throw conflict("当前工作流失败类型不支持重试客户洞察");
+        }
+        AgentState state = agentStateMapper.selectOne(Wrappers.<AgentState>lambdaQuery()
+                .eq(AgentState::getWorkflowId, workflowId)
+                .eq(AgentState::getAgentType, AgentType.CUSTOMER_INSIGHT));
+        if (state == null) {
+            throw notFound("客户洞察状态不存在");
+        }
+        if (state.getAgentStatus() != AgentStatus.FAILED) {
+            throw conflict("客户洞察不是失败状态，不能重试");
+        }
+        if (!KYC_MODEL_CALL_FAILED.equals(state.getErrorCode())) {
+            throw conflict("当前客户洞察失败类型不支持重试");
+        }
+        if (!request.failedExecutionId().equals(state.getExecutionId())) {
+            throw conflict("客户洞察失败执行已变化，请刷新状态后重试");
+        }
+
+        String failedExecutionId = state.getExecutionId();
+        LocalDateTime now = LocalDateTime.now();
+        state.setAgentStatus(AgentStatus.READY);
+        state.setExecutionId("EXE-" + UUID.randomUUID());
+        state.setErrorCode(null);
+        state.setErrorMessage(null);
+        state.setStartTime(null);
+        state.setFinishTime(null);
+        if (agentStateMapper.updateById(state) != 1) {
+            throw conflict("客户洞察状态已被其他请求更新，请刷新后重试");
+        }
+
+        workflow.setWorkflowStatus(WorkflowStatus.RUNNING);
+        workflow.setErrorCode(null);
+        workflow.setErrorMessage(null);
+        workflow.setFinishTime(null);
+        workflow.setUpdatedAt(now);
+        updateWorkflow(workflow);
+
+        eventPublisher.publishEvent(new KycRegenerationRequestedEvent(workflowId, null, List.of()));
+        afterCommit(() -> eventHub.publish(workflowId, "KYC_RETRY_REQUESTED", Map.of(
+                "workflowId", workflowId,
+                "agentType", AgentType.CUSTOMER_INSIGHT,
+                "failedExecutionId", failedExecutionId,
+                "status", workflow.getWorkflowStatus())));
+        return detail(principal, workflowId);
     }
 
     @Transactional

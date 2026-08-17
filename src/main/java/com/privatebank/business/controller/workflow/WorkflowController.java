@@ -4,6 +4,7 @@ import com.privatebank.business.dto.workflow.ArtifactRefResponse;
 import com.privatebank.business.dto.workflow.AvailableImportBatchResponse;
 import com.privatebank.business.dto.workflow.CancelRequest;
 import com.privatebank.business.dto.workflow.CustomerInsightAnalysisResponse;
+import com.privatebank.business.dto.workflow.CustomerInsightRetryRequest;
 import com.privatebank.business.dto.workflow.CustomerManagerWorkflowResponse;
 import com.privatebank.business.dto.workflow.CreateWorkflowRequest;
 import com.privatebank.business.dto.workflow.OutputRetryRequest;
@@ -110,6 +111,16 @@ public class WorkflowController {
             @AuthenticationPrincipal CurrentUserPrincipal principal,
             @PathVariable String workflowId) {
         return workflowService.customerInsight(principal, workflowId);
+    }
+
+    @PostMapping("/{workflowId}/customer-insight/retry")
+    @PreAuthorize("hasRole('CUSTOMER_MANAGER')")
+    public WorkflowDetailResponse retryCustomerInsight(
+            @AuthenticationPrincipal CurrentUserPrincipal principal,
+            @PathVariable String workflowId,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @Valid @RequestBody CustomerInsightRetryRequest request) {
+        return workflowService.retryCustomerInsight(principal, workflowId, idempotencyKey, request);
     }
 
     @PostMapping("/{workflowId}/inputs")
