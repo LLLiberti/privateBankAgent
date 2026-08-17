@@ -34,10 +34,12 @@ public class Neo4jKycGraphDataLoader implements KycGraphDataLoader {
             RETURN DISTINCT
                  coalesce(toString(source.entity_id), toString(source.node_id), elementId(source)) AS startNodeId,
                  coalesce(source.node_type, head([label IN labels(source) WHERE label <> 'KGEntity'])) AS startNodeType,
+                 coalesce(source.name, source.enterprise_name, source.organization_name) AS startNodeName,
                  source = customer AS startIsCustomer,
                  type(edge) AS relationType,
                  coalesce(toString(target.entity_id), toString(target.node_id), elementId(target)) AS endNodeId,
                  coalesce(target.node_type, head([label IN labels(target) WHERE label <> 'KGEntity'])) AS endNodeType,
+                 coalesce(target.name, target.enterprise_name, target.organization_name) AS endNodeName,
                  target = customer AS endIsCustomer,
                  edge.source_id AS sourceId,
                  edge.verification_status AS verificationStatus,
@@ -82,19 +84,29 @@ public class Neo4jKycGraphDataLoader implements KycGraphDataLoader {
         }
     }
 
-    private KycGraphRelationship relationship(Record record) {
+    KycGraphRelationship relationship(Record record) {
         return new KycGraphRelationship(
                 record.get("startNodeId").asString(),
                 normalizedCode(record.get("startNodeType")),
+                stringValue(record.get("startNodeName")),
                 record.get("startIsCustomer").asBoolean(false),
                 normalizedCode(record.get("relationType")),
                 record.get("endNodeId").asString(),
                 normalizedCode(record.get("endNodeType")),
+                stringValue(record.get("endNodeName")),
                 record.get("endIsCustomer").asBoolean(false),
                 longValue(record.get("sourceId")),
                 normalizedCode(record.get("verificationStatus")),
                 doubleValue(record.get("confidence")),
                 record.get("distance").asInt());
+    }
+
+    private String stringValue(org.neo4j.driver.Value value) {
+        if (value == null || value.isNull()) {
+            return null;
+        }
+        String text = value.asString().trim();
+        return text.isEmpty() ? null : text;
     }
 
     private String normalizedCode(org.neo4j.driver.Value value) {

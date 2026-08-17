@@ -76,6 +76,8 @@ class KycWorkflowStateServiceTest {
         assertThat(artifact.getVersion()).isEqualTo(1);
         JsonNode savedResult = objectMapper.readTree(artifact.getResult());
         assertThat(savedResult.path("maskingApplied").asBoolean()).isTrue();
+        assertThat(savedResult.path("aliasMappings").path("P-1").asText()).isEqualTo("张三");
+        assertThat(savedResult.path("aliasMappings").path("E-1").asText()).isEqualTo("某某科技有限公司");
         assertThat(savedResult.path("analysis").path("riskLevel").asText()).isEqualTo("MEDIUM");
         assertThat(savedResult.toString()).doesNotContain("managerSupplement", "客户经理补充的原始内容");
 
@@ -113,7 +115,10 @@ class KycWorkflowStateServiceTest {
     private KycMaskedInput maskedInput() {
         return new KycMaskedInput(
                 Map.of("person", Map.of(), "managerSupplement", Map.of("signals", Set.of("LIQUIDITY_NEED"))),
-                Map.of("SRC-1", 1001L), Set.of("客户经理补充的原始内容"), "a".repeat(64));
+                Map.of("SRC-1", 1001L),
+                Set.of("客户经理补充的原始内容"),
+                Map.of("P-1", "张三", "E-1", "某某科技有限公司"),
+                "a".repeat(64));
     }
 
     private KycGenerationResult generationResult() {

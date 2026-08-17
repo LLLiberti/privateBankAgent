@@ -104,11 +104,13 @@ class WorkflowServiceKycReviewTest {
         artifact.setExecutionId("EXE-2");
         artifact.setCreateTime(LocalDateTime.of(2026, 8, 14, 15, 30));
         artifact.setResult("""
-                {"contractVersion":"kyc-result.v2","analysis":{
-                  "riskLevel":"MEDIUM","summary":"客户风险概述","findings":[{
-                    "dimension":"PERSON","riskLevel":"MEDIUM","finding":"风险事实","evidenceRefs":["SRC-1"]
-                  }],"riskAlerts":["风险提示"],"recommendedActions":["建议动作"],"dataGaps":["待补充信息"],
-                  "graphAssessment":{"contribution":"CONFIRMATORY","summary":"图谱印证","evidenceRefs":["SRC-2"]}
+                {"contractVersion":"kyc-result.v2","aliasMappings":{
+                  "P-1":"张三","E-1":"某某科技有限公司"
+                },"analysis":{
+                  "riskLevel":"MEDIUM","summary":"客户P-1关联E-1","findings":[{
+                    "dimension":"PERSON","riskLevel":"MEDIUM","finding":"P-1存在风险","evidenceRefs":["SRC-1"]
+                  }],"riskAlerts":["E-1风险提示"],"recommendedActions":["联系P-1"],"dataGaps":["缺少E-1信息"],
+                  "graphAssessment":{"contribution":"CONFIRMATORY","summary":"P-1与E-1图谱印证","evidenceRefs":["SRC-2"]}
                 }}""");
         AgentState state = agentState(AgentType.CUSTOMER_INSIGHT, AgentStatus.SUCCESS);
         when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
@@ -121,9 +123,17 @@ class WorkflowServiceKycReviewTest {
         assertThat(response.version()).isEqualTo(2);
         assertThat(response.actionable()).isTrue();
         assertThat(response.analysis().riskLevel()).isEqualTo("MEDIUM");
+        assertThat(response.analysis().summary()).isEqualTo("客户张三关联某某科技有限公司");
+        assertThat(response.analysis().findings().getFirst().finding()).isEqualTo("张三存在风险");
+        assertThat(response.analysis().riskAlerts()).containsExactly("某某科技有限公司风险提示");
+        assertThat(response.analysis().recommendedActions()).containsExactly("联系张三");
+        assertThat(response.analysis().dataGaps()).containsExactly("缺少某某科技有限公司信息");
+        assertThat(response.analysis().graphAssessment().summary())
+                .isEqualTo("张三与某某科技有限公司图谱印证");
         assertThat(response.analysis().findings()).singleElement()
                 .extracting(CustomerInsightAnalysisResponse.Finding::evidenceRefs)
                 .isEqualTo(List.of("SRC-1"));
+        assertThat(artifact.getResult()).contains("P-1存在风险", "E-1风险提示");
     }
 
     @Test
@@ -257,7 +267,8 @@ class WorkflowServiceKycReviewTest {
                 mock(WorkflowEventHub.class),
                 eventPublisher,
                 new ObjectMapper().findAndRegisterModules(),
-                mock(FileStorageService.class));
+                mock(FileStorageService.class),
+                new CustomerInsightAliasRestorer());
         return new Fixture(service, workflowMapper, agentStateMapper, artifactMapper, eventPublisher,
                 customerDataMapper, importBatchMapper);
     }

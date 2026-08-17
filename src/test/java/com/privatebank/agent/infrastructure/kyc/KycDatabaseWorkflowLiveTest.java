@@ -44,6 +44,7 @@ import com.privatebank.business.mapper.workflow.WorkflowStateMapper;
 import com.privatebank.business.security.CurrentUserPrincipal;
 import com.privatebank.business.security.CurrentUserService;
 import com.privatebank.business.service.document.FileStorageService;
+import com.privatebank.business.service.workflow.CustomerInsightAliasRestorer;
 import com.privatebank.business.service.workflow.WorkflowAgentResultListener;
 import com.privatebank.business.service.workflow.WorkflowEventHub;
 import com.privatebank.business.service.workflow.WorkflowService;
@@ -640,10 +641,17 @@ class KycDatabaseWorkflowLiveTest {
                 WorkflowEventHub eventHub,
                 org.springframework.context.ApplicationEventPublisher eventPublisher,
                 ObjectMapper objectMapper,
-                FileStorageService fileStorageService) {
+                FileStorageService fileStorageService,
+                CustomerInsightAliasRestorer customerInsightAliasRestorer) {
             return new WorkflowService(
                     workflowStateMapper, agentStateMapper, agentArtifactMapper, reviewMapper, customerDataMapper, importBatchMapper,
-                    currentUserService, idempotencyExecutor, eventHub, eventPublisher, objectMapper, fileStorageService);
+                    currentUserService, idempotencyExecutor, eventHub, eventPublisher, objectMapper, fileStorageService,
+                    customerInsightAliasRestorer);
+        }
+
+        @Bean
+        CustomerInsightAliasRestorer customerInsightAliasRestorer() {
+            return new CustomerInsightAliasRestorer();
         }
 
     }

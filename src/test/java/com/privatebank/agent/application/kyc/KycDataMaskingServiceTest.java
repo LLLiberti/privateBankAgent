@@ -43,6 +43,12 @@ class KycDataMaskingServiceTest {
         assertThat(input.sha256()).matches("[0-9a-f]{64}");
         assertThat(input.prohibitedTerms()).contains("腾讯科技", "腾讯");
         assertThat(input.evidenceReferences()).containsKeys("SRC-1", "SRC-2", "SRC-3", "SRC-4", "SRC-5");
+        assertThat(input.aliasMappings())
+                .containsEntry("P-1", "马化腾")
+                .containsEntry("E-1", "腾讯科技")
+                .containsEntry("C-1", "某竞争企业")
+                .containsEntry("F-1", "张三")
+                .containsEntry("O-1", "某慈善基金会");
 
         Map<String, Object> enterprise = section(input, "enterprise");
         assertThat(records(enterprise, "relations").getFirst()).containsEntry("enterpriseAlias", "E-1");
@@ -90,6 +96,8 @@ class KycDataMaskingServiceTest {
 
         assertThatThrownBy(() -> section(input, "person").put("unsafe", "value"))
                 .isInstanceOf(UnsupportedOperationException.class);
+        assertThatThrownBy(() -> input.aliasMappings().put("P-2", "其他客户"))
+                .isInstanceOf(UnsupportedOperationException.class);
     }
 
     @Test
@@ -103,12 +111,15 @@ class KycDataMaskingServiceTest {
                 base.familyRelations(), base.successionArrangements(), base.socialRelations(),
                 base.socialActivities(), base.publicReputations(), base.reputationRisks(),
                 List.of(
-                        new KycGraphRelationship("PERSON:1", "PERSON", true, "CONTROLS",
-                                "ENTERPRISE:501", "ENTERPRISE", false, 501L, "VERIFIED", 0.99, 1),
-                        new KycGraphRelationship("ENTERPRISE:501", "ENTERPRISE", false, "HAS_EVENT",
-                                "EVENT:9001", "EVENT", false, 502L, "VERIFIED", 0.90, 2),
-                        new KycGraphRelationship("PERSON:1", "PERSON", true, "FAMILY_OF",
-                                "FAMILY_MEMBER:301", "FAMILYMEMBER", false, 503L, "VERIFIED", 0.95, 1)));
+                        new KycGraphRelationship("PERSON:1", "PERSON", "图中的客户名称", true, "CONTROLS",
+                                "ENTERPRISE:501", "ENTERPRISE", "图中的企业名称", false,
+                                501L, "VERIFIED", 0.99, 1),
+                        new KycGraphRelationship("ENTERPRISE:501", "ENTERPRISE", "图中的企业名称", false,
+                                "HAS_EVENT", "EVENT:9001", "EVENT", "人工智能战略事件", false,
+                                502L, "VERIFIED", 0.90, 2),
+                        new KycGraphRelationship("PERSON:1", "PERSON", "图中的客户名称", true, "FAMILY_OF",
+                                "FAMILY_MEMBER:301", "FAMILYMEMBER", "图中的家属名称", false,
+                                503L, "VERIFIED", 0.95, 1)));
 
         KycMaskedInput input = maskingService.mask(data);
         @SuppressWarnings("unchecked")
@@ -135,7 +146,14 @@ class KycDataMaskingServiceTest {
         assertThat(graph.get(2))
                 .containsEntry("startAlias", "P-1")
                 .containsEntry("endAlias", "F-1");
-        assertThat(payload).doesNotContain("PERSON:1", "ENTERPRISE:501", "EVENT:9001");
+        assertThat(input.aliasMappings())
+                .containsEntry("P-1", "马化腾")
+                .containsEntry("E-1", "腾讯科技")
+                .containsEntry("F-1", "张三")
+                .containsEntry("V-1", "人工智能战略事件");
+        assertThat(payload).doesNotContain(
+                "PERSON:1", "ENTERPRISE:501", "EVENT:9001",
+                "图中的客户名称", "图中的企业名称", "图中的家属名称", "人工智能战略事件");
         assertThat(input.evidenceReferences().get(graph.get(0).get("sourceRef"))).isEqualTo(501L);
         assertThat(input.evidenceReferences().get(graph.get(1).get("sourceRef"))).isEqualTo(502L);
     }

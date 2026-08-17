@@ -77,6 +77,7 @@ public class WorkflowService {
     private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper;
     private final FileStorageService fileStorageService;
+    private final CustomerInsightAliasRestorer customerInsightAliasRestorer;
 
     @Transactional
     public WorkflowCreatedResponse create(
@@ -448,7 +449,10 @@ public class WorkflowService {
             if (!"kyc-result.v2".equals(result.path("contractVersion").asText()) || !analysis.isObject()) {
                 throw invalidCustomerInsightArtifact();
             }
-            return objectMapper.treeToValue(analysis, CustomerInsightAnalysisResponse.Analysis.class);
+            CustomerInsightAnalysisResponse.Analysis parsed = objectMapper.treeToValue(
+                    analysis, CustomerInsightAnalysisResponse.Analysis.class);
+            return customerInsightAliasRestorer.restore(
+                    parsed, result.path("aliasMappings"), artifact.getArtifactId());
         } catch (JsonProcessingException exception) {
             throw invalidCustomerInsightArtifact();
         }

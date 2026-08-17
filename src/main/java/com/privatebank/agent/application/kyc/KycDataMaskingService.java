@@ -96,7 +96,12 @@ public class KycDataMaskingService {
             throw new KycInputValidationException("KYC 脱敏输入超过 256 KiB 上限");
         }
 
-        return new KycMaskedInput(payload, context.evidenceReferences, context.prohibitedTerms, sha256(serialized));
+        return new KycMaskedInput(
+                payload,
+                context.evidenceReferences,
+                context.prohibitedTerms,
+                context.aliasMappingsSnapshot(),
+                sha256(serialized));
     }
 
     private Map<String, Object> person(KycCustomerData data, MaskingContext context) {
@@ -629,8 +634,8 @@ public class KycDataMaskingService {
     }
 
     private void registerAliases(KycCustomerData data, MaskingContext context) {
-        context.registerEntity(data.summary().fullName(), "P-1", false);
-        context.registerEntity(data.summary().displayName(), "P-1", false);
+        context.registerNamedEntity(data.summary().fullName(), "P-1", false);
+        context.registerNamedEntity(data.summary().displayName(), "P-1", false);
         registerRecordAliases(data.enterpriseRelations(), context, AliasKind.ENTERPRISE);
         registerRecordAliases(data.careers(), context, AliasKind.ORGANIZATION);
         registerRecordAliases(data.enterpriseMarketRelations(), context, AliasKind.COUNTERPARTY);
@@ -638,6 +643,7 @@ public class KycDataMaskingService {
         registerRecordAliases(data.socialRelations(), context, AliasKind.ORGANIZATION);
         registerRecordAliases(data.socialActivities(), context, AliasKind.ACTIVITY_PARTY);
         registerRecordAliases(data.publicReputations(), context, AliasKind.PUBLISHER);
+        registerGraphAliases(data.graphRelationships(), context);
     }
 
     private void registerRecordAliases(
@@ -652,25 +658,59 @@ public class KycDataMaskingService {
             switch (kind) {
                 case ENTERPRISE -> {
                     String alias = context.enterpriseAlias(record);
-                    context.registerEntity(stringValue(value(record, "enterpriseName")), alias, true);
+                    context.registerNamedEntity(stringValue(value(record, "enterpriseName")), alias, true);
                     context.registerEntity(stringValue(value(record, "stockCode")), alias, false);
                 }
                 case FAMILY -> {
                     String alias = context.familyAlias(record);
-                    context.registerEntity(stringValue(value(record, "memberName")), alias, false);
+                    context.registerNamedEntity(stringValue(value(record, "memberName")), alias, false);
                     context.registerEntity(stringValue(value(record, "protectedAlias")), alias, false);
                 }
-                case COUNTERPARTY -> context.registerEntity(
+                case COUNTERPARTY -> context.registerNamedEntity(
                         stringValue(value(record, "counterpartName")), context.counterpartyAlias(record), true);
-                case ORGANIZATION -> context.registerEntity(
+                case ORGANIZATION -> context.registerNamedEntity(
                         stringValue(value(record, "organizationName")), context.organizationAlias(record), true);
                 case ACTIVITY_PARTY -> {
-                    context.registerEntity(stringValue(value(record, "partnerName")), context.activityPartyAlias(record), true);
+                    context.registerNamedEntity(
+                            stringValue(value(record, "partnerName")), context.activityPartyAlias(record), true);
                 }
-                case PUBLISHER -> context.registerEntity(
+                case PUBLISHER -> context.registerNamedEntity(
                         stringValue(value(record, "publisherName")), context.publisherAlias(record), true);
             }
         }
+    }
+
+    private void registerGraphAliases(
+            List<KycGraphRelationship> relationships, MaskingContext context) {
+        if (relationships == null || relationships.isEmpty()) {
+            return;
+        }
+        relationships.stream().limit(MAX_RECORDS_PER_SECTION).forEach(relationship -> {
+            registerGraphNode(
+                    relationship.startNodeId(), relationship.startNodeType(),
+                    relationship.startNodeName(), relationship.startIsCustomer(), context);
+            registerGraphNode(
+                    relationship.endNodeId(), relationship.endNodeType(),
+                    relationship.endNodeName(), relationship.endIsCustomer(), context);
+        });
+    }
+
+    private void registerGraphNode(
+            String nodeId,
+            String nodeType,
+            String nodeName,
+            boolean customer,
+            MaskingContext context) {
+        String alias = context.graphAlias(nodeType, nodeId, customer);
+        context.registerNamedEntity(nodeName, alias, isOrganizationLike(nodeType));
+    }
+
+    private boolean isOrganizationLike(String nodeType) {
+        if (nodeType == null) {
+            return false;
+        }
+        String normalized = nodeType.replaceAll("[^A-Za-z0-9]", "").toUpperCase(Locale.ROOT);
+        return "ENTERPRISE".equals(normalized) || "ORGANIZATION".equals(normalized);
     }
 
     private String stringValue(Object value) {
@@ -1093,6 +1133,7 @@ public class KycDataMaskingService {
         private final Map<String, String> otherGraphAliases = new LinkedHashMap<>();
         private final Map<String, String> redactions = new LinkedHashMap<>();
         private final Map<String, String> aliasesByNormalizedName = new LinkedHashMap<>();
+        private final Map<String, String> aliasMappings = new LinkedHashMap<>();
         private final Set<String> ambiguousNormalizedNames = new LinkedHashSet<>();
         private final Set<String> truncatedSections = new LinkedHashSet<>();
         private final Map<String, String> omissions = new LinkedHashMap<>();
@@ -1210,6 +1251,18 @@ public class KycDataMaskingService {
                     bindName(commonName, alias);
                 }
             }
+        }
+
+        private void registerNamedEntity(String rawName, String alias, boolean organization) {
+            registerEntity(rawName, alias, organization);
+            if (rawName == null || rawName.isBlank() || alias == null) {
+                return;
+            }
+            aliasMappings.putIfAbsent(alias, rawName.trim());
+        }
+
+        private Map<String, String> aliasMappingsSnapshot() {
+            return Collections.unmodifiableMap(new LinkedHashMap<>(aliasMappings));
         }
 
         private void addRedaction(String raw, String alias) {

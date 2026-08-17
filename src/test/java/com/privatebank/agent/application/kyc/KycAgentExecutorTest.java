@@ -104,6 +104,7 @@ class KycAgentExecutorTest {
                 "managerSupplement.signals", "不是 SRC-* 证据", "evidenceRefs 最多 10 项",
                 "不得根据出生年份", "dataCompleteness");
         assertThat(captured.get().userPrompt()).contains("customer", "riskLevel");
+        assertThat(captured.get().userPrompt()).doesNotContain("aliasMappings", "绝不能进入模型的客户名称");
     }
 
     @Test
@@ -248,6 +249,7 @@ class KycAgentExecutorTest {
                                 "evidenceRefs", List.of(), "relationships", List.of())),
                 Map.of("SRC-1", 1001L),
                 Set.of("张三", "星海集团", "腾讯控股有限公司", "腾讯"),
+                Map.of("P-1", "绝不能进入模型的客户名称"),
                 "a".repeat(64));
     }
 
