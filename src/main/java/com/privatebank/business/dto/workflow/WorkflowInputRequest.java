@@ -7,14 +7,14 @@ import jakarta.validation.constraints.Size;
 import java.util.List;
 
 /**
- * description and confirmedItems are runtime-only inputs for REGENERATE. They
- * are not stored in any workflow or KYC artifact.
+ * description is a runtime-only analysis instruction and confirmedItems are
+ * runtime-only evidence. They are not stored in any workflow or KYC artifact.
  */
 public record WorkflowInputRequest(
         @NotNull Action action,
         @NotBlank @Size(max = 64) String currentArtifactId,
-        @Size(max = 2000) String description,
-        List<@Size(max = 128) String> confirmedItems) {
+        @Size(max = 600) String description,
+        @Size(max = 20) List<@Size(max = 128) String> confirmedItems) {
 
     public enum Action {
         /** Customer manager approves the KYC analysis and releases downstream Agents. */
