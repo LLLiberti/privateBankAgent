@@ -35,6 +35,7 @@ public class DownstreamAgentExecutionService {
     private final MarketInsightAgentExecutor marketInsightExecutor;
     private final ProductExpertAgentExecutor productExpertExecutor;
     private final CfsDesignAgentExecutor cfsDesignExecutor;
+    private final CfsDesignResultValidator cfsDesignResultValidator;
     private final ComplianceCheckAgentExecutor complianceCheckExecutor;
     private final ProductKnowledgeSearchService productKnowledgeSearchService;
     private final ObjectMapper objectMapper;
@@ -112,7 +113,10 @@ public class DownstreamAgentExecutionService {
                             "kycArtifactId", kycArtifactId,
                             "marketArtifactId", marketArtifactId,
                             "kypArtifactId", kypArtifactId)));
+            cfsDesignResultValidator.validate(result.output());
             stateService.complete(claim, write(result.output()), null);
+        } catch (IllegalArgumentException validationException) {
+            fail(claim, "CFS_DESIGN_VALIDATION_FAILED", validationException);
         } catch (Exception exception) {
             fail(claim, "CFS_DESIGN_EXECUTION_FAILED", exception);
         }
