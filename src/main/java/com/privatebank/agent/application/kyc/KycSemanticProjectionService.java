@@ -5,7 +5,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -55,11 +54,6 @@ public final class KycSemanticProjectionService {
 
     public String governanceCategory(Object... text) {
         return first("GOVERNANCE", text);
-    }
-
-    public Set<String> managerSupplementSignals(String... text) {
-        List<String> signals = project("MANAGER_SUPPLEMENT", (Object[]) text);
-        return signals.isEmpty() ? Set.of("SUPPLEMENT_PROVIDED") : Set.copyOf(signals);
     }
 
     private List<String> project(String group, Object... source) {
@@ -152,16 +146,6 @@ public final class KycSemanticProjectionService {
                 rule("TRUST_STRUCTURE", "信托", "trust"),
                 rule("PROFESSIONAL_MANAGEMENT", "职业经理", "professional management"),
                 rule("BOARD_GOVERNANCE", "董事会", "board")));
-        rules.put("MANAGER_SUPPLEMENT", List.of(
-                rule("LIQUIDITY_NEED", "流动性", "liquidity", "现金"),
-                rule("RISK_TOLERANCE", "风险承受", "risk tolerance", "回撤"),
-                rule("ASSET_ALLOCATION", "资产配置", "asset allocation", "投资"),
-                rule("FAMILY_SUCCESSION", "家族", "传承", "succession"),
-                rule("ENTERPRISE_OWNERSHIP", "股权", "控制", "ownership"),
-                rule("CROSS_BORDER_NEED", "跨境", "海外", "cross border"),
-                rule("TAX_PLANNING", "税务", "tax"),
-                rule("CHARITABLE_GIVING", "公益", "慈善", "charity"),
-                rule("SERVICE_PREFERENCE", "服务", "service preference")));
         return Map.copyOf(rules);
     }
 

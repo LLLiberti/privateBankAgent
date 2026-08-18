@@ -6,7 +6,6 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.privatebank.agent.adapter.workflow.KycWorkflowListener;
 import com.privatebank.agent.application.kyc.KycRuntimeSupplement;
-import com.privatebank.agent.application.kyc.KycRuntimeSupplementProjector;
 import com.privatebank.agent.application.kyc.KycSensitiveTextPolicy;
 import com.privatebank.agent.application.kyc.KycAgentExecutor;
 import com.privatebank.agent.application.kyc.KycDataMaskingService;
@@ -142,9 +141,6 @@ class KycDatabaseWorkflowLiveTest {
     private KycDataMaskingService dataMaskingService;
 
     @org.springframework.beans.factory.annotation.Autowired
-    private KycRuntimeSupplementProjector runtimeSupplementProjector;
-
-    @org.springframework.beans.factory.annotation.Autowired
     private WorkflowService workflowService;
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -253,12 +249,12 @@ class KycDatabaseWorkflowLiveTest {
         String rawManagerSupplement = "LIVE_RUNTIME_SUPPLEMENT_DO_NOT_PERSIST_20260812";
         List<String> confirmedItems = List.of("客户近期存在流动性安排需求");
         KycMaskedInput regeneratedMaskedInput = timed(workflowId, "PROJECT_RUNTIME_SUPPLEMENT", testStartedNanos, () -> {
-            KycRuntimeSupplement supplement = runtimeSupplementProjector.project(rawManagerSupplement, confirmedItems);
+            KycRuntimeSupplement supplement = new KycRuntimeSupplement(rawManagerSupplement, confirmedItems);
             KycMaskedInput maskedInput = dataMaskingService.mask(rawCustomerData, supplement);
-            assertThat(supplement.signals()).contains("LIQUIDITY_NEED").doesNotContain(rawManagerSupplement);
             assertThat(objectMapper.writeValueAsString(maskedInput.payload()))
-                    .contains("managerSupplement", "LIQUIDITY_NEED")
-                    .doesNotContain(rawManagerSupplement);
+                    .contains("managerInstruction", rawManagerSupplement,
+                            "managerEvidence", "MGR-1", "客户近期存在流动性安排需求");
+            assertThat(maskedInput.managerEvidenceRefs()).containsExactly("MGR-1");
             return maskedInput;
         });
 
@@ -585,15 +581,8 @@ class KycDatabaseWorkflowLiveTest {
         }
 
         @Bean
-        KycRuntimeSupplementProjector kycRuntimeSupplementProjector() {
-            return new KycRuntimeSupplementProjector();
-        }
-
-        @Bean
-        KycWorkflowListener kycWorkflowListener(
-                KycWorkflowExecutionService executionService,
-                KycRuntimeSupplementProjector runtimeSupplementProjector) {
-            return new KycWorkflowListener(executionService, runtimeSupplementProjector);
+        KycWorkflowListener kycWorkflowListener(KycWorkflowExecutionService executionService) {
+            return new KycWorkflowListener(executionService);
         }
 
         @Bean

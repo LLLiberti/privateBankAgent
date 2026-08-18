@@ -192,7 +192,8 @@ class WorkflowServiceKycReviewTest {
         when(fixture.agentStateMapper.selectList(anyAgentStateQuery())).thenReturn(List.of(kycState));
 
         var response = fixture.service.retryCustomerInsight(principal(), "WF-1", "retry-key",
-                new CustomerInsightRetryRequest("EXE-FAILED"));
+                new CustomerInsightRetryRequest(
+                        "EXE-FAILED", "重新关注流动性", List.of("客户确认近期存在流动性安排")));
 
         assertThat(response.workflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
         assertThat(workflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
@@ -206,7 +207,8 @@ class WorkflowServiceKycReviewTest {
         assertThat(kycState.getStartTime()).isNull();
         assertThat(kycState.getFinishTime()).isNull();
         verify(fixture.eventPublisher).publishEvent(
-                new KycRegenerationRequestedEvent("WF-1", null, List.of()));
+                new KycRegenerationRequestedEvent(
+                        "WF-1", "重新关注流动性", List.of("客户确认近期存在流动性安排")));
     }
 
     @Test

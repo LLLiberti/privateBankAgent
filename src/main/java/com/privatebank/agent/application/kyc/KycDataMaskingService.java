@@ -26,8 +26,8 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * Builds the only customer-data object permitted to cross the KYC model boundary.
- * Raw records remain process-local. Direct identifiers become stable runtime aliases,
+ * Builds the only customer and runtime-manager input permitted to cross the KYC model boundary.
+ * Raw records and manager supplements remain process-local. Direct identifiers become stable runtime aliases,
  * precise contact/location data is removed, and non-identifying business semantics are
  * retained through an explicit contract; unknown fields are reported in dataCompleteness
  * and never cross the model boundary implicitly.
@@ -77,31 +77,70 @@ public class KycDataMaskingService {
         collectProhibitedTerms(data, context.prohibitedTerms);
 
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("contractVersion", "kyc-input.v5");
+        payload.put("contractVersion", "kyc-input.v6");
         payload.put("person", person(data, context));
         payload.put("enterprise", enterprise(data, context));
         payload.put("family", family(data, context));
         payload.put("social", social(data, context));
         payload.put("relationshipGraph", relationshipGraph(data.graphRelationships(), context));
-        if (supplement != null && !supplement.signals().isEmpty()) {
-            Map<String, Object> managerSupplement = new LinkedHashMap<>();
-            managerSupplement.put("signals", supplement.signals().stream().sorted().toList());
-            payload.put("managerSupplement", managerSupplement);
-        }
+        Set<String> managerEvidenceRefs = new LinkedHashSet<>();
+        addManagerContext(payload, supplement, managerEvidenceRefs, context);
         payload.put("dataCompleteness", context.dataCompleteness());
         inputSafetyValidator.validate(payload, context.prohibitedTerms);
 
         byte[] serialized = serialize(payload);
         if (serialized.length > MAX_PAYLOAD_BYTES) {
-            throw new KycInputValidationException("KYC 脱敏输入超过 256 KiB 上限");
+            throw new KycInputValidationException(
+                    "KYC 脱敏输入超过 256 KiB 上限，实际字节数: " + serialized.length,
+                    "PAYLOAD_TOO_LARGE",
+                    "root",
+                    String.valueOf(serialized.length),
+                    null,
+                    "MAX_BYTES=" + MAX_PAYLOAD_BYTES);
         }
 
         return new KycMaskedInput(
                 payload,
                 context.evidenceReferences,
+                managerEvidenceRefs,
                 context.prohibitedTerms,
                 context.aliasMappingsSnapshot(),
                 sha256(serialized));
+    }
+
+    private void addManagerContext(
+            Map<String, Object> payload,
+            KycRuntimeSupplement supplement,
+            Set<String> managerEvidenceRefs,
+            MaskingContext context) {
+        if (supplement == null || supplement.isEmpty()) {
+            return;
+        }
+        putSanitizedText(payload, "managerInstruction", supplement.description(),
+                context, "managerInstruction", 600);
+
+        List<Map<String, Object>> evidence = new ArrayList<>();
+        for (String item : supplement.confirmedItems()) {
+            String statement = sanitizeText(item, context).trim();
+            if (statement.isEmpty()) {
+                continue;
+            }
+            if (statement.codePointCount(0, statement.length()) > 128) {
+                context.omit("managerEvidence[" + evidence.size() + "].statement", "TEXT_TRUNCATED");
+                statement = KycSensitiveTextPolicy.truncateCodePoints(statement, 128);
+            }
+            String evidenceRef = "MGR-" + (evidence.size() + 1);
+            Map<String, Object> record = new LinkedHashMap<>();
+            record.put("evidenceRef", evidenceRef);
+            record.put("statement", statement);
+            record.put("sourceType", "CUSTOMER_MANAGER_CONFIRMED");
+            record.put("verificationStatus", "CONFIRMED");
+            evidence.add(record);
+            managerEvidenceRefs.add(evidenceRef);
+        }
+        if (!evidence.isEmpty()) {
+            payload.put("managerEvidence", evidence);
+        }
     }
 
     private Map<String, Object> person(KycCustomerData data, MaskingContext context) {

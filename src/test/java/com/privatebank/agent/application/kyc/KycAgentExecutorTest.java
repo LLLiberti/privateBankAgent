@@ -101,7 +101,7 @@ class KycAgentExecutorTest {
         assertThat(captured.get().outputType()).isEqualTo(KycStructuredResult.class);
         assertThat(captured.get().systemPrompt()).contains(
                 "SRC-*", "不得猜测", "dataGaps", "graphAssessment",
-                "managerSupplement.signals", "不是 SRC-* 证据", "evidenceRefs 最多 10 项",
+                "managerInstruction", "managerEvidence", "MGR-*", "evidenceRefs 最多 10 项",
                 "不得根据出生年份", "dataCompleteness");
         assertThat(captured.get().userPrompt()).contains("customer", "riskLevel");
         assertThat(captured.get().userPrompt()).doesNotContain("aliasMappings", "绝不能进入模型的客户名称");
@@ -204,6 +204,32 @@ class KycAgentExecutorTest {
         assertThatThrownBy(() -> executor(runtime(new AtomicInteger(), invalid), 1).execute(request()))
                 .isInstanceOf(KycGenerationException.class)
                 .hasRootCauseMessage("findings[0].evidenceRefs 至少包含一项证据");
+    }
+
+    @Test
+    void acceptsFindingSupportedByRuntimeManagerEvidence() {
+        KycStructuredResult managerEvidenceResult = resultWithEvidence("MGR-1");
+        KycMaskedInput input = new KycMaskedInput(
+                Map.of("person", Map.of("customer", Map.of("riskLevel", "HIGH")),
+                        "managerEvidence", List.of(Map.of(
+                                "evidenceRef", "MGR-1",
+                                "statement", "P-1近期存在流动性安排",
+                                "sourceType", "CUSTOMER_MANAGER_CONFIRMED",
+                                "verificationStatus", "CONFIRMED")),
+                        "relationshipGraph", Map.of("available", false, "relationshipCount", 0,
+                                "evidenceRefs", List.of(), "relationships", List.of())),
+                Map.of("SRC-1", 1001L),
+                Set.of("MGR-1"),
+                Set.of(),
+                Map.of(),
+                "d".repeat(64));
+
+        AgentExecutionResult<KycStructuredResult> result = executor(
+                runtime(new AtomicInteger(), managerEvidenceResult), 1).execute(
+                        new AgentExecutionRequest<>(
+                                "WF-1", "EXE-1", AgentType.CUSTOMER_INSIGHT, "SYSTEM", input, Map.of()));
+
+        assertThat(result.output().findings().getFirst().evidenceRefs()).containsExactly("MGR-1");
     }
 
     private KycMaskedInput graphInput() {

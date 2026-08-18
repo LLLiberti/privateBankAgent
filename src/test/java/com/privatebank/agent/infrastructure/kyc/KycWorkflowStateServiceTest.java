@@ -21,6 +21,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -79,7 +80,8 @@ class KycWorkflowStateServiceTest {
         assertThat(savedResult.path("aliasMappings").path("P-1").asText()).isEqualTo("张三");
         assertThat(savedResult.path("aliasMappings").path("E-1").asText()).isEqualTo("某某科技有限公司");
         assertThat(savedResult.path("analysis").path("riskLevel").asText()).isEqualTo("MEDIUM");
-        assertThat(savedResult.toString()).doesNotContain("managerSupplement", "客户经理补充的原始内容");
+        assertThat(savedResult.toString()).doesNotContain(
+                "managerInstruction", "managerEvidence", "客户经理补充的原始内容");
 
         ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
         verify(eventPublisher).publishEvent(eventCaptor.capture());
@@ -114,8 +116,11 @@ class KycWorkflowStateServiceTest {
 
     private KycMaskedInput maskedInput() {
         return new KycMaskedInput(
-                Map.of("person", Map.of(), "managerSupplement", Map.of("signals", Set.of("LIQUIDITY_NEED"))),
+                Map.of("person", Map.of(), "managerInstruction", "关注P-1流动性",
+                        "managerEvidence", List.of(Map.of(
+                                "evidenceRef", "MGR-1", "statement", "P-1存在流动性安排"))),
                 Map.of("SRC-1", 1001L),
+                Set.of("MGR-1"),
                 Set.of("客户经理补充的原始内容"),
                 Map.of("P-1", "张三", "E-1", "某某科技有限公司"),
                 "a".repeat(64));

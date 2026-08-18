@@ -274,7 +274,8 @@ public class WorkflowService {
         workflow.setUpdatedAt(now);
         updateWorkflow(workflow);
 
-        eventPublisher.publishEvent(new KycRegenerationRequestedEvent(workflowId, null, List.of()));
+        eventPublisher.publishEvent(new KycRegenerationRequestedEvent(
+                workflowId, request.description(), request.confirmedItems()));
         afterCommit(() -> eventHub.publish(workflowId, "KYC_RETRY_REQUESTED", Map.of(
                 "workflowId", workflowId,
                 "agentType", AgentType.CUSTOMER_INSIGHT,

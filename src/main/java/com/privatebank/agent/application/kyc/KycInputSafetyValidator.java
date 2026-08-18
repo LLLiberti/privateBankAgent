@@ -34,12 +34,24 @@ public final class KycInputSafetyValidator {
         if (value instanceof Map<?, ?> map) {
             for (Map.Entry<?, ?> entry : map.entrySet()) {
                 if (!(entry.getKey() instanceof String key)) {
-                    throw new KycInputValidationException("KYC 脱敏输入包含非文本字段名");
+                    throw new KycInputValidationException(
+                            "KYC 脱敏输入包含非文本字段名: " + fieldPath,
+                            "NON_TEXT_FIELD_NAME",
+                            fieldPath,
+                            String.valueOf(entry.getKey()),
+                            null,
+                            entry.getKey() == null ? "null" : entry.getKey().getClass().getName());
                 }
                 String normalized = normalize(key);
                 String childPath = fieldPath + "." + key;
                 if (DIRECT_IDENTIFIER_KEYS.contains(normalized)) {
-                    throw new KycInputValidationException("KYC 脱敏输入包含禁止字段: " + childPath);
+                    throw new KycInputValidationException(
+                            "KYC 脱敏输入包含禁止字段: " + childPath,
+                            "PROHIBITED_FIELD",
+                            childPath,
+                            key,
+                            null,
+                            "DIRECT_IDENTIFIER_FIELD");
                 }
                 validateValue(entry.getValue(), childPath, prohibitedTerms);
             }
@@ -57,12 +69,34 @@ public final class KycInputSafetyValidator {
             validateText(text, fieldPath, prohibitedTerms);
             return;
         }
-        throw new KycInputValidationException("KYC 脱敏输入包含不支持的字段类型: " + fieldPath);
+        throw new KycInputValidationException(
+                "KYC 脱敏输入包含不支持的字段类型: " + fieldPath,
+                "UNSUPPORTED_FIELD_TYPE",
+                fieldPath,
+                String.valueOf(value),
+                null,
+                value.getClass().getName());
     }
 
     private void validateText(String text, String fieldPath, Set<String> prohibitedTerms) {
-        if (text.isBlank() || text.codePointCount(0, text.length()) > 600) {
-            throw new KycInputValidationException("KYC 脱敏输入包含非法文本: " + fieldPath);
+        if (text.isBlank()) {
+            throw new KycInputValidationException(
+                    "KYC 脱敏输入包含空文本: " + fieldPath,
+                    "BLANK_TEXT",
+                    fieldPath,
+                    text,
+                    null,
+                    "TEXT");
+        }
+        int codePointCount = text.codePointCount(0, text.length());
+        if (codePointCount > 600) {
+            throw new KycInputValidationException(
+                    "KYC 脱敏输入文本超过 600 字符: " + fieldPath,
+                    "TEXT_TOO_LONG",
+                    fieldPath,
+                    text,
+                    null,
+                    "CODE_POINTS=" + codePointCount);
         }
         KycSensitiveTextPolicy.rejectInput(text, fieldPath, prohibitedTerms);
     }

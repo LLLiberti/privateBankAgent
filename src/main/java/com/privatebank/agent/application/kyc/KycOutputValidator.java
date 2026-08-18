@@ -36,7 +36,7 @@ public class KycOutputValidator {
         requireExactFields(root, ROOT_FIELDS, "根节点字段不符合 KYC 合约");
         requireEnum(root.path("riskLevel"), RISK_LEVELS, "riskLevel 无效");
         requireText(root.path("summary"), 1200, "summary 无效");
-        validateFindings(root.path("findings"), input.evidenceReferences().keySet());
+        validateFindings(root.path("findings"), input.allowedEvidenceRefs());
         validateTextArray(root.path("riskAlerts"), 20, 600, "riskAlerts 无效");
         validateTextArray(root.path("recommendedActions"), 20, 600, "recommendedActions 无效");
         validateTextArray(root.path("dataGaps"), 20, 600, "dataGaps 无效");
@@ -160,7 +160,7 @@ public class KycOutputValidator {
                 JsonNode evidenceRef = evidenceRefs.get(evidenceIndex);
                 if (!evidenceRef.isTextual()) {
                     throw new KycOutputValidationException(
-                            path + ".evidenceRefs[" + evidenceIndex + "] 必须是 SRC-* 文本");
+                            path + ".evidenceRefs[" + evidenceIndex + "] 必须是证据编号文本");
                 }
                 if (!allowedEvidence.contains(evidenceRef.asText())) {
                     throw new KycOutputValidationException(
