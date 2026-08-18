@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.privatebank.agent.domain.event.AgentExecutionRequestedEvent;
 import com.privatebank.business.dto.common.PageResponse;
 import com.privatebank.business.common.exception.BusinessException;
 import com.privatebank.business.common.exception.ErrorCode;
@@ -375,6 +376,7 @@ public class WorkflowService {
         } else {
             workflow.setWorkflowStatus(WorkflowStatus.RUNNING);
             ready(workflowId, AgentType.SOLUTION_DESIGN, true);
+            afterCommit(() -> eventPublisher.publishEvent(new AgentExecutionRequestedEvent(workflowId, AgentType.SOLUTION_DESIGN, latestInputRefs(workflowId))));
         }
         workflow.setUpdatedAt(LocalDateTime.now());
         updateWorkflow(workflow);
@@ -601,6 +603,28 @@ public class WorkflowService {
         } catch (JsonProcessingException exception) {
             return List.of();
         }
+    }
+
+    private Map<String, String> latestInputRefs(String workflowId) {
+        AgentArtifact kyc = artifactMapper.selectOne(Wrappers.<AgentArtifact>lambdaQuery()
+                .eq(AgentArtifact::getWorkflowId, workflowId)
+                .eq(AgentArtifact::getAgentType, AgentType.CUSTOMER_INSIGHT)
+                .orderByDesc(AgentArtifact::getVersion)
+                .last("LIMIT 1"));
+        AgentArtifact market = artifactMapper.selectOne(Wrappers.<AgentArtifact>lambdaQuery()
+                .eq(AgentArtifact::getWorkflowId, workflowId)
+                .eq(AgentArtifact::getAgentType, AgentType.MARKET_INSIGHT)
+                .orderByDesc(AgentArtifact::getVersion)
+                .last("LIMIT 1"));
+        AgentArtifact kyp = artifactMapper.selectOne(Wrappers.<AgentArtifact>lambdaQuery()
+                .eq(AgentArtifact::getWorkflowId, workflowId)
+                .eq(AgentArtifact::getAgentType, AgentType.PRODUCT_EXPERT)
+                .orderByDesc(AgentArtifact::getVersion)
+                .last("LIMIT 1"));
+        return Map.of(
+                "kycArtifactId", kyc == null ? "下游Agent输入kycArtifact不存在" : kyc.getArtifactId(),
+                "marketArtifactId", market == null ? "下游Agent输入竞争分析Artifact不存在" : market.getArtifactId(),
+                "kypArtifactId", kyp == null ? "下游Agent输入kypArtifact不存在" : kyp.getArtifactId());
     }
 
     private void afterCommit(Runnable action) {
