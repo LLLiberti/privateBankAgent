@@ -13,7 +13,7 @@ public record ProductKnowledgeProperties(
     public ProductKnowledgeProperties {
         qdrant = qdrant == null ? new Qdrant(null, 0, null, null, false) : qdrant;
         elasticsearch = elasticsearch == null
-                ? new Elasticsearch(null, null, null, null)
+                ? new Elasticsearch(null)
                 : elasticsearch;
         embedding = embedding == null
                 ? new Embedding(null, null, null, 1024)
@@ -38,9 +38,6 @@ public record ProductKnowledgeProperties(
     }
 
     public record Elasticsearch(
-            String uris,
-            String username,
-            String password,
             String index) {
         public Elasticsearch {
             index = index == null || index.isBlank()

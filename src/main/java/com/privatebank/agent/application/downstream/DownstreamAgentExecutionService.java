@@ -67,7 +67,7 @@ public class DownstreamAgentExecutionService {
         try {
             AgentArtifact kyc = artifact(kycArtifactId);
             ProductKnowledgeSearchResult searchResult = productKnowledgeSearchService.search(
-                    "客户产品需求", null, null, null, "ACTIVE");
+                    "客户产品需求", null, null, "ACTIVE");
             ProductExpertInput input = new ProductExpertInput(
                     workflowId,
                     kycArtifactId,

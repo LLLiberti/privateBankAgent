@@ -20,8 +20,7 @@ public class ProductKnowledgeSearchTool {
             String query,
             List<String> productIds,
             String riskLevel,
-            String region,
             String saleStatus) {
-        return searchService.search(query, productIds, riskLevel, region, saleStatus);
+        return searchService.search(query, productIds, riskLevel, saleStatus);
     }
 }

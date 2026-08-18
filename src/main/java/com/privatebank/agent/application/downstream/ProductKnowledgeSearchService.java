@@ -10,6 +10,7 @@ import com.privatebank.business.entity.product.ProductMetadata;
 import com.privatebank.business.mapper.product.ProductMetadataMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -18,11 +19,8 @@ import org.springframework.web.client.RestClient;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 /**
  * Product knowledge search used by KYP Agent.
@@ -37,22 +35,32 @@ import java.util.stream.Collectors;
 public class ProductKnowledgeSearchService {
 
     private final ProductMetadataMapper productMetadataMapper;
+    private final ProductDocumentIdResolver documentIdResolver;
     private final ProductKnowledgeProperties properties;
     private final ObjectMapper objectMapper;
+
+    @Value("${spring.elasticsearch.uris:}")
+    private String esUris;
+
+    @Value("${spring.elasticsearch.username:}")
+    private String esUsername;
+
+    @Value("${spring.elasticsearch.password:}")
+    private String esPassword;
 
     public ProductKnowledgeSearchResult search(
             String query,
             List<String> requestedProductIds,
             String riskLevel,
-            String region,
             String saleStatus) {
-        List<String> candidates = filterCandidates(query, requestedProductIds, riskLevel, region, saleStatus);
+        List<String> candidates = filterCandidates(query, requestedProductIds, riskLevel, saleStatus);
         if (candidates.isEmpty()) {
             return new ProductKnowledgeSearchResult(candidates, List.of());
         }
 
-        List<ProductKnowledgeEvidence> esEvidence = esSearch(query, candidates);
-        List<ProductKnowledgeEvidence> vectorEvidence = qdrantSearch(query, candidates);
+        List<String> documentIds = documentIdResolver.toDocumentIds(candidates);
+        List<ProductKnowledgeEvidence> esEvidence = esSearch(query, documentIds, candidates);
+        List<ProductKnowledgeEvidence> vectorEvidence = qdrantSearch(query, documentIds, candidates);
         List<ProductKnowledgeEvidence> merged = mergeByRrf(esEvidence, vectorEvidence, properties.topK());
         return new ProductKnowledgeSearchResult(candidates, merged);
     }
@@ -61,7 +69,6 @@ public class ProductKnowledgeSearchService {
             String query,
             List<String> requestedProductIds,
             String riskLevel,
-            String region,
             String saleStatus) {
         if (requestedProductIds != null && !requestedProductIds.isEmpty()) {
             return requestedProductIds.stream().distinct().toList();
@@ -80,17 +87,19 @@ public class ProductKnowledgeSearchService {
                 .toList();
     }
 
-    private List<ProductKnowledgeEvidence> esSearch(String query, List<String> productIds) {
-        ProductKnowledgeProperties.Elasticsearch es = properties.elasticsearch();
-        if (!StringUtils.hasText(es.uris()) || !StringUtils.hasText(query)) {
+    private List<ProductKnowledgeEvidence> esSearch(
+            String query,
+            List<String> documentIds,
+            List<String> candidateProductIds) {
+        if (!StringUtils.hasText(esUris) || !StringUtils.hasText(query)) {
             return List.of();
         }
         try {
             RestClient client = RestClient.builder()
-                    .baseUrl(normalizeBase(es.uris()))
+                    .baseUrl(normalizeBase(esUris))
                     .defaultHeaders(headers -> {
-                        if (StringUtils.hasText(es.username()) && StringUtils.hasText(es.password())) {
-                            headers.setBasicAuth(es.username(), es.password());
+                        if (StringUtils.hasText(esUsername) && StringUtils.hasText(esPassword)) {
+                            headers.setBasicAuth(esUsername, esPassword);
                         }
                         headers.setContentType(MediaType.APPLICATION_JSON);
                     })
@@ -100,20 +109,23 @@ public class ProductKnowledgeSearchService {
                     "query", Map.of(
                             "bool", Map.of(
                                     "must", List.of(Map.of("match", Map.of("content", query))),
-                                    "filter", List.of(Map.of("terms", Map.of("document_id", productIds))))));
+                                    "filter", List.of(Map.of("terms", Map.of("document_id", documentIds))))));
             String response = client.post()
-                    .uri("/" + es.index() + "/_search")
+                    .uri("/" + properties.elasticsearch().index() + "/_search")
                     .body(body)
                     .retrieve()
                     .body(String.class);
-            return parseEsResponse(response);
+            return parseEsResponse(response, candidateProductIds);
         } catch (Exception exception) {
             log.warn("Elasticsearch product search failed, fallback to empty: {}", exception.getMessage());
             return List.of();
         }
     }
 
-    private List<ProductKnowledgeEvidence> qdrantSearch(String query, List<String> productIds) {
+    private List<ProductKnowledgeEvidence> qdrantSearch(
+            String query,
+            List<String> documentIds,
+            List<String> candidateProductIds) {
         ProductKnowledgeProperties.Qdrant qdrant = properties.qdrant();
         ProductKnowledgeProperties.Embedding embedding = properties.embedding();
         if (!StringUtils.hasText(qdrant.host()) || !StringUtils.hasText(embedding.apiKey()) || !StringUtils.hasText(query)) {
@@ -138,13 +150,13 @@ public class ProductKnowledgeSearchService {
                     "limit", Math.max(20, properties.topK() * 2),
                     "with_payload", true,
                     "filter", Map.of("must", List.of(
-                            Map.of("key", "document_id", "match", Map.of("value", productIds)))));
+                            Map.of("key", "document_id", "match", Map.of("value", documentIds)))));
             String response = client.post()
                     .uri("/collections/" + qdrant.collectionName() + "/points/search")
                     .body(body)
                     .retrieve()
                     .body(String.class);
-            return parseQdrantResponse(response);
+            return parseQdrantResponse(response, candidateProductIds);
         } catch (Exception exception) {
             log.warn("Qdrant product search failed, fallback to empty: {}", exception.getMessage());
             return List.of();
@@ -187,7 +199,9 @@ public class ProductKnowledgeSearchService {
         return List.of();
     }
 
-    private List<ProductKnowledgeEvidence> parseEsResponse(String response) {
+    private List<ProductKnowledgeEvidence> parseEsResponse(
+            String response,
+            List<String> candidateProductIds) {
         try {
             JsonNode hits = objectMapper.readTree(response).path("hits").path("hits");
             List<ProductKnowledgeEvidence> result = new ArrayList<>();
@@ -197,8 +211,9 @@ public class ProductKnowledgeSearchService {
                 String chunkId = source.path("chunk_id").asText();
                 String documentId = source.path("document_id").asText();
                 String content = source.path("content").asText("");
+                String productId = resolveProductId(documentId, candidateProductIds);
                 result.add(new ProductKnowledgeEvidence(
-                        chunkId, documentId, documentId, content, documentId, 1.0 / rank));
+                        chunkId, documentId, productId, content, documentId, 1.0 / rank));
                 rank++;
             }
             return result;
@@ -208,7 +223,9 @@ public class ProductKnowledgeSearchService {
         }
     }
 
-    private List<ProductKnowledgeEvidence> parseQdrantResponse(String response) {
+    private List<ProductKnowledgeEvidence> parseQdrantResponse(
+            String response,
+            List<String> candidateProductIds) {
         try {
             JsonNode result = objectMapper.readTree(response).path("result");
             List<ProductKnowledgeEvidence> list = new ArrayList<>();
@@ -218,8 +235,9 @@ public class ProductKnowledgeSearchService {
                 String chunkId = payload.path("chunk_id").asText();
                 String documentId = payload.path("document_id").asText();
                 String content = payload.path("content").asText("");
+                String productId = resolveProductId(documentId, candidateProductIds);
                 list.add(new ProductKnowledgeEvidence(
-                        chunkId, documentId, documentId, content, documentId, 1.0 / rank));
+                        chunkId, documentId, productId, content, documentId, 1.0 / rank));
                 rank++;
             }
             return list;
@@ -227,6 +245,13 @@ public class ProductKnowledgeSearchService {
             log.warn("Qdrant response parse failed: {}", exception.getMessage());
             return List.of();
         }
+    }
+
+    private String resolveProductId(String documentId, List<String> candidateProductIds) {
+        if (candidateProductIds != null && candidateProductIds.contains(documentId)) {
+            return documentId;
+        }
+        return documentIdResolver.toProductId(documentId);
     }
 
     private List<ProductKnowledgeEvidence> mergeByRrf(
