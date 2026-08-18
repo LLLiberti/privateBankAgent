@@ -7,6 +7,7 @@ import com.privatebank.business.enums.workflow.AgentType;
 import com.privatebank.business.service.workflow.DownstreamAgentsReadyEvent;
 import lombok.RequiredArgsConstructor;
 import org.springframework.scheduling.annotation.Async;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
@@ -30,7 +31,7 @@ public class DownstreamAgentWorkflowListener {
     }
 
     @Async(KycAsyncConfiguration.KYC_EXECUTOR)
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @EventListener
     public void onAgentExecutionRequested(AgentExecutionRequestedEvent event) {
         switch (event.agentType()) {
             case MARKET_INSIGHT -> executionService.executeMarketInsight(

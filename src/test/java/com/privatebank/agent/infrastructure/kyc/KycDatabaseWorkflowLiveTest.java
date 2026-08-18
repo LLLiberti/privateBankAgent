@@ -17,6 +17,7 @@ import com.privatebank.agent.application.runtime.AgentProgressPublisher;
 import com.privatebank.agent.config.AgentScopeConfiguration;
 import com.privatebank.agent.config.AgentScopeProperties;
 import com.privatebank.agent.infrastructure.agentscope.AgentRuntimeContextFactory;
+import com.privatebank.agent.infrastructure.workflow.AgentWorkflowStateService;
 import com.privatebank.agent.infrastructure.agentscope.AgentScopeExecutionEngine;
 import com.privatebank.agent.domain.kyc.KycCustomerData;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
@@ -601,13 +602,27 @@ class KycDatabaseWorkflowLiveTest {
         }
 
         @Bean
+        AgentWorkflowStateService agentWorkflowStateService(
+                WorkflowStateMapper workflowStateMapper,
+                AgentStateMapper agentStateMapper,
+                AgentArtifactMapper agentArtifactMapper,
+                org.springframework.context.ApplicationEventPublisher eventPublisher) {
+            return new AgentWorkflowStateService(
+                    workflowStateMapper, agentStateMapper, agentArtifactMapper, eventPublisher);
+        }
+
+        @Bean
         WorkflowAgentResultListener workflowAgentResultListener(
                 WorkflowStateMapper workflowStateMapper,
                 AgentStateMapper agentStateMapper,
                 AgentArtifactMapper agentArtifactMapper,
-                WorkflowEventHub eventHub) {
+                AgentWorkflowStateService agentWorkflowStateService,
+                WorkflowEventHub eventHub,
+                org.springframework.context.ApplicationEventPublisher eventPublisher,
+                ObjectMapper objectMapper) {
             return new WorkflowAgentResultListener(
-                    workflowStateMapper, agentStateMapper, agentArtifactMapper, eventHub);
+                    workflowStateMapper, agentStateMapper, agentArtifactMapper,
+                    agentWorkflowStateService, eventHub, eventPublisher, objectMapper);
         }
 
         @Bean
