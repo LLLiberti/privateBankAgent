@@ -12,13 +12,17 @@ import com.privatebank.business.dto.workflow.CustomerInsightRetryRequest;
 import com.privatebank.business.dto.workflow.CustomerManagerWorkflowResponse;
 import com.privatebank.business.dto.workflow.CreateWorkflowRequest;
 import com.privatebank.business.dto.workflow.WorkflowInputRequest;
+import com.privatebank.business.dto.workflow.ReviewRequest;
 import com.privatebank.business.entity.workflow.AgentArtifact;
 import com.privatebank.business.entity.workflow.AgentState;
 import com.privatebank.business.entity.workflow.WorkflowState;
+import com.privatebank.business.entity.workflow.WorkflowReview;
+import com.privatebank.agent.domain.event.AgentExecutionRequestedEvent;
 import com.privatebank.business.enums.auth.RoleName;
 import com.privatebank.business.enums.workflow.AgentStatus;
 import com.privatebank.business.enums.workflow.AgentType;
 import com.privatebank.business.enums.workflow.WorkflowStatus;
+import com.privatebank.business.enums.workflow.ReviewStatus;
 import com.privatebank.business.mapper.customer.CustomerDataMapper;
 import com.privatebank.business.mapper.workflow.AgentArtifactMapper;
 import com.privatebank.business.mapper.workflow.AgentStateMapper;
@@ -35,6 +39,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -345,6 +350,46 @@ class WorkflowServiceKycReviewTest {
     }
 
     @Test
+    void rejectsReviewAndReleasesCfsWithLatestInputArtifacts() {
+        Fixture fixture = fixture();
+        WorkflowState workflow = workflow();
+        workflow.setWorkflowStatus(WorkflowStatus.WAITING_REVIEW);
+        AgentArtifact cfs = artifact("ART-CFS", AgentType.SOLUTION_DESIGN);
+        AgentArtifact compliance = artifact("ART-COMPLIANCE", AgentType.COMPLIANCE_CHECK);
+        compliance.setComplianceResult("PASS");
+        compliance.setResult("{\"cfsArtifactId\":\"ART-CFS\"}");
+        AgentState cfsState = agentState(AgentType.SOLUTION_DESIGN, AgentStatus.SUCCESS);
+        cfsState.setExecutionId("EXE-CFS-OLD");
+        AgentArtifact kyc = artifact("ART-KYC", AgentType.CUSTOMER_INSIGHT);
+        AgentArtifact market = artifact("ART-MARKET", AgentType.MARKET_INSIGHT);
+        AgentArtifact product = artifact("ART-PRODUCT", AgentType.PRODUCT_EXPERT);
+        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
+        when(fixture.artifactMapper.selectById("ART-CFS")).thenReturn(cfs);
+        when(fixture.artifactMapper.selectById("ART-COMPLIANCE")).thenReturn(compliance);
+        when(fixture.reviewMapper.selectOne(any())).thenReturn(null);
+        when(fixture.reviewMapper.insert(any(WorkflowReview.class))).thenReturn(1);
+        when(fixture.agentStateMapper.selectOne(anyAgentStateQuery())).thenReturn(cfsState);
+        when(fixture.agentStateMapper.updateById(any(AgentState.class))).thenReturn(1);
+        when(fixture.workflowMapper.updateById(any(WorkflowState.class))).thenReturn(1);
+        when(fixture.artifactMapper.selectOne(anyArtifactQuery())).thenReturn(kyc, market, product);
+
+        var response = fixture.service.review(principal(), "WF-1", "review-reject-key",
+                new ReviewRequest("ART-CFS", "ART-COMPLIANCE", ReviewRequest.Decision.REJECT, "请重新生成CFS"));
+
+        assertThat(response.reviewStatus()).isEqualTo(ReviewStatus.REJECTED);
+        assertThat(response.workflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
+        assertThat(workflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
+        assertThat(cfsState.getAgentStatus()).isEqualTo(AgentStatus.READY);
+        assertThat(cfsState.getExecutionId()).startsWith("EXE-").isNotEqualTo("EXE-CFS-OLD");
+        ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(fixture.eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue()).isEqualTo(new AgentExecutionRequestedEvent(
+                "WF-1", AgentType.SOLUTION_DESIGN, Map.of(
+                        "kycArtifactId", "ART-KYC",
+                        "marketArtifactId", "ART-MARKET",
+                        "kypArtifactId", "ART-PRODUCT")));
+    }
+    @Test
     void rejectsEmptySupplementBeforeItCanStartARegeneration() {
         Fixture fixture = fixture();
         WorkflowState workflow = workflow();
@@ -379,11 +424,12 @@ class WorkflowServiceKycReviewTest {
         ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
         CustomerDataMapper customerDataMapper = mock(CustomerDataMapper.class);
         ImportBatchMapper importBatchMapper = mock(ImportBatchMapper.class);
+        WorkflowReviewMapper reviewMapper = mock(WorkflowReviewMapper.class);
         WorkflowService service = new WorkflowService(
                 workflowMapper,
                 agentStateMapper,
                 artifactMapper,
-                mock(WorkflowReviewMapper.class),
+                reviewMapper,
                 customerDataMapper,
                 importBatchMapper,
                 currentUserService,
@@ -394,7 +440,7 @@ class WorkflowServiceKycReviewTest {
                 mock(FileStorageService.class),
                 new CustomerInsightAliasRestorer());
         return new Fixture(service, workflowMapper, agentStateMapper, artifactMapper, eventPublisher,
-                customerDataMapper, importBatchMapper);
+                customerDataMapper, importBatchMapper, reviewMapper);
     }
 
     private CustomerSummaryResponse customer() {
@@ -414,6 +460,14 @@ class WorkflowServiceKycReviewTest {
         return workflow;
     }
 
+    private AgentArtifact artifact(String artifactId, AgentType type) {
+        AgentArtifact artifact = new AgentArtifact();
+        artifact.setArtifactId(artifactId);
+        artifact.setWorkflowId("WF-1");
+        artifact.setAgentType(type);
+        artifact.setVersion(1);
+        return artifact;
+    }
     private AgentArtifact kycArtifact(String artifactId, int version) {
         AgentArtifact artifact = new AgentArtifact();
         artifact.setArtifactId(artifactId);
@@ -441,6 +495,7 @@ class WorkflowServiceKycReviewTest {
             AgentArtifactMapper artifactMapper,
             ApplicationEventPublisher eventPublisher,
             CustomerDataMapper customerDataMapper,
-            ImportBatchMapper importBatchMapper) {
+            ImportBatchMapper importBatchMapper,
+            WorkflowReviewMapper reviewMapper) {
     }
 }
