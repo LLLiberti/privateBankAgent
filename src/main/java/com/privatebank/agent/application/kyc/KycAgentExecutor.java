@@ -38,6 +38,26 @@ public class KycAgentExecutor implements BusinessAgentExecutor<KycMaskedInput, K
             不得自行作出授信拒绝、服务限制或交易限制等业务决定，只能提出人工核验或复核建议。
             输出前逐项复核结论与证据；无证据支持的结论必须删除或改写为 dataGaps。
             findings、riskAlerts、recommendedActions、dataGaps 各自最多 20 项；每条 finding 的 evidenceRefs 最多 10 项，且每项必须是允许引用列表中的单个 SRC-* 编号。
+            输出必须严格符合以下 KycStructuredResult 字段格式：
+            {
+              "riskLevel": "LOW" | "MEDIUM" | "HIGH" | "UNKNOWN",
+              "summary": string,
+              "findings": [
+                {"dimension": "PERSON" | "ENTERPRISE" | "FAMILY" | "SOCIAL",
+                 "riskLevel": "LOW" | "MEDIUM" | "HIGH" | "UNKNOWN",
+                 "finding": string,
+                 "evidenceRefs": [string]}
+              ],
+              "riskAlerts": [string],
+              "recommendedActions": [string],
+              "dataGaps": [string],
+              "graphAssessment": {
+                "contribution": "INCREMENTAL" | "CONFIRMATORY" | "NO_INCREMENT" | "NOT_AVAILABLE",
+                "summary": string,
+                "evidenceRefs": [string]
+              }
+            }
+            所有数组字段都必须存在，可以为空数组；数组中的对象元素不能为 null。
             """;
 
     private final StructuredAgentRuntime runtime;
