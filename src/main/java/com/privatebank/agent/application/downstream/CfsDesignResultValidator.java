@@ -35,7 +35,7 @@ public class CfsDesignResultValidator {
         requireText(result.cfsStructure().chapter1CustomerInfo(), "cfsStructure.chapter1CustomerInfo");
         requireText(result.cfsStructure().chapter2ServicePlan(), "cfsStructure.chapter2ServicePlan");
         requireText(result.cfsStructure().chapter3MarketingStrategy(), "cfsStructure.chapter3MarketingStrategy");
-        requireNonNull(result.cfsStructure().attachments(), "cfsStructure.attachments");
+        requireThreePlusSixAttachments(result.cfsStructure().attachments());
         requireNonNull(result.pendingVerificationItems(), "pendingVerificationItems");
         requireNonNull(result.estimatedDataItems(), "estimatedDataItems");
         requireNonNull(result.sourceRefs(), "sourceRefs");
@@ -57,6 +57,16 @@ public class CfsDesignResultValidator {
     private void requireText(String value, String field) {
         if (!StringUtils.hasText(value)) {
             throw new IllegalArgumentException("CFS缺少 " + field);
+        }
+    }
+
+    private void requireThreePlusSixAttachments(java.util.List<String> attachments) {
+        requireNonNull(attachments, "cfsStructure.attachments");
+        if (attachments.size() != 6) {
+            throw new IllegalArgumentException("CFS 3+6 要求 cfsStructure.attachments 必须恰好包含 6 项非空内容");
+        }
+        for (int i = 0; i < attachments.size(); i++) {
+            requireText(attachments.get(i), "cfsStructure.attachments[" + i + "]");
         }
     }
 

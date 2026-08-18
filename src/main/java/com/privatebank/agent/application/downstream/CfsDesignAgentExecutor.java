@@ -47,7 +47,41 @@ public class CfsDesignAgentExecutor implements BusinessAgentExecutor<CfsDesignIn
               ],
               "ruleRefs": [string]
             }
+            3+6 CFS 内容要求必须完整输出。3 个章节字段必须有内容，attachments 必须严格按照 1 至 6 的顺序输出 6 项，且每一项必须有内容。章节和附件的具体要求如下：
+            {
+              "threePlusSixRequirements": {
+                "chapters": [
+                  {
+                    "chapterNo": 1,
+                    "title": "客户信息",
+                    "outputField": "cfsStructure.chapter1CustomerInfo",
+                    "requiredContent": ["客户个人情况", "公司及行业情况"]
+                  },
+                  {
+                    "chapterNo": 2,
+                    "title": "服务方案",
+                    "outputField": "cfsStructure.chapter2ServicePlan",
+                    "requiredContent": ["人、企、家、社四维需求", "服务建议"]
+                  },
+                  {
+                    "chapterNo": 3,
+                    "title": "营销策略",
+                    "outputField": "cfsStructure.chapter3MarketingStrategy",
+                    "requiredContent": ["接触路径", "关键窗口期", "待进一步了解问题"]
+                  }
+                ],
+                "attachments": [
+                  {"attachmentNo": 1, "title": "实控人及其他关键人物详情", "outputField": "cfsStructure.attachments[0]"},
+                  {"attachmentNo": 2, "title": "公司大事记及财务分析", "outputField": "cfsStructure.attachments[1]"},
+                  {"attachmentNo": 3, "title": "公司主要产品及服务介绍", "outputField": "cfsStructure.attachments[2]"},
+                  {"attachmentNo": 4, "title": "行业知识及竞争对手情况", "outputField": "cfsStructure.attachments[3]"},
+                  {"attachmentNo": 5, "title": "公司及个人舆情", "outputField": "cfsStructure.attachments[4]"},
+                  {"attachmentNo": 6, "title": "工作优势及营销话术", "outputField": "cfsStructure.attachments[5]"}
+                ]
+              }
+            }
             所有数组字段都必须存在，可以为空数组；数组中的对象元素不能为 null。
+            但 cfsStructure.attachments 是 3+6 的固定结构，不允许为空数组，必须恰好包含 6 个非空字符串。
             customerId、inputArtifactRefs 中的三个 ID、cfsVersion 必须有效。
             """;
 

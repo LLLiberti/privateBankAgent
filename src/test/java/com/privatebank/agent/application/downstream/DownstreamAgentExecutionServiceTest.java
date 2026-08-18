@@ -170,7 +170,10 @@ class DownstreamAgentExecutionServiceTest {
                 "strategy",
                 "guide",
                 "risk assessment",
-                new CfsDesignResult.CfsStructure("customer", "service", "marketing", List.of()),
+                new CfsDesignResult.CfsStructure("customer", "service", "marketing", List.of(
+                        "controller details", "company events and financial analysis",
+                        "products and services", "industry and competitors",
+                        "company and personal public opinion", "advantages and marketing language")),
                 List.of(),
                 List.of(),
                 List.of("SRC-1"),
