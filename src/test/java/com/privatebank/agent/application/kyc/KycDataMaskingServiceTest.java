@@ -194,7 +194,13 @@ class KycDataMaskingServiceTest {
         assertThatThrownBy(() -> validator.validate(
                 Map.of("contractVersion", "kyc-input.v5", "person", Map.of("rawText", "原始备注")), Set.of()))
                 .isInstanceOf(KycInputValidationException.class)
-                .hasMessageContaining("禁止字段");
+                .hasMessageContaining("禁止字段")
+                .satisfies(error -> {
+                    KycInputValidationException validation = (KycInputValidationException) error;
+                    assertThat(validation.reasonCode()).isEqualTo("PROHIBITED_FIELD");
+                    assertThat(validation.fieldPath()).isEqualTo("root.person.rawText");
+                    assertThat(validation.category()).isEqualTo("DIRECT_IDENTIFIER_FIELD");
+                });
         for (String field : List.of("birth_date", "school_name")) {
             assertThatThrownBy(() -> validator.validate(
                     Map.of("contractVersion", "kyc-input.v5", "person", Map.of(field, "某值")), Set.of()))
@@ -207,11 +213,29 @@ class KycDataMaskingServiceTest {
         assertThatThrownBy(() -> validator.validate(
                 Map.of("contractVersion", "kyc-input.v5", "person", Map.of("signal", "联系010-12345678")), Set.of()))
                 .isInstanceOf(KycInputValidationException.class)
-                .hasMessageContaining("直接标识信息");
+                .hasMessageContaining("直接标识信息")
+                .satisfies(error -> {
+                    KycInputValidationException validation = (KycInputValidationException) error;
+                    assertThat(validation.reasonCode()).isEqualTo("FORMATTED_IDENTIFIER_REMAINED");
+                    assertThat(validation.fieldPath()).isEqualTo("root.person.signal");
+                    assertThat(validation.rejectedValue()).isEqualTo("联系010-12345678");
+                    assertThat(validation.category()).isEqualTo("PHONE");
+                });
         assertThatThrownBy(() -> validator.validate(
                 Map.of("contractVersion", "kyc-input.v5", "person", Map.of("signal", "旧证件110105491231002")), Set.of()))
                 .isInstanceOf(KycInputValidationException.class)
                 .hasMessageContaining("直接标识信息");
+        assertThatThrownBy(() -> validator.validate(
+                Map.of("contractVersion", "kyc-input.v5", "person", Map.of("signal", "客户马化腾偏好长期配置")),
+                Set.of("马化腾")))
+                .isInstanceOf(KycInputValidationException.class)
+                .satisfies(error -> {
+                    KycInputValidationException validation = (KycInputValidationException) error;
+                    assertThat(validation.reasonCode()).isEqualTo("PROHIBITED_TERM_REMAINED");
+                    assertThat(validation.fieldPath()).isEqualTo("root.person.signal");
+                    assertThat(validation.matchedTerm()).isEqualTo("马化腾");
+                    assertThat(validation.category()).isEqualTo("ENTITY_TERM");
+                });
     }
 
     @Test

@@ -93,7 +93,13 @@ public class KycDataMaskingService {
 
         byte[] serialized = serialize(payload);
         if (serialized.length > MAX_PAYLOAD_BYTES) {
-            throw new KycInputValidationException("KYC 脱敏输入超过 256 KiB 上限");
+            throw new KycInputValidationException(
+                    "KYC 脱敏输入超过 256 KiB 上限，实际字节数: " + serialized.length,
+                    "PAYLOAD_TOO_LARGE",
+                    "root",
+                    String.valueOf(serialized.length),
+                    null,
+                    "MAX_BYTES=" + MAX_PAYLOAD_BYTES);
         }
 
         return new KycMaskedInput(
