@@ -50,7 +50,7 @@ public class AgentScopeExecutionEngine implements StructuredAgentRuntime {
                             List.of(new UserMessage(definition.userPrompt())),
                             definition.outputType(),
                             contextFactory.create(request))
-                    .block();
+                    .block(properties.modelCallTimeout());
             if (result == null || result.getGenerateReason() == null
                     || !SUCCESS_REASONS.contains(result.getGenerateReason())
                     || !result.hasStructuredData()) {

@@ -19,27 +19,21 @@ import com.privatebank.business.mapper.workflow.AgentStateMapper;
 import com.privatebank.business.mapper.workflow.WorkflowStateMapper;
 import com.privatebank.business.security.CurrentUserPrincipal;
 import com.privatebank.business.service.workflow.WorkflowService;
-import com.privatebank.business.service.workflow.WorkflowEventHub;
 import org.awaitility.Awaitility;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.core.env.PropertySource;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import static org.mockito.Mockito.doAnswer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -50,8 +44,6 @@ import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 
 @Tag("live")
 @EnabledIfSystemProperty(named = "private-bank.test.live-full-workflow", matches = "true")
@@ -65,7 +57,7 @@ class AgentWorkflowFullLiveTest {
     private static final Logger log = LoggerFactory.getLogger(AgentWorkflowFullLiveTest.class);
 
     private static final long PERSON_ID = Long.getLong("private-bank.test.person-id", 1L);
-    private static final long IMPORT_BATCH_ID = Long.getLong("private-bank.test.import-batch-id", 1L);
+    private static final long IMPORT_BATCH_ID = Long.getLong("private-bank.test.import-batch-id", 4L);
     private static final String CUSTOMER_MANAGER_ID = "USER-DEMO-CUSTOMER-MANAGER";
     private static final String RAW_SUPPLEMENT = "LIQUIDITY_NEED_RAW_VALUE_" + UUID.randomUUID();
     private static final String DATASOURCE_URL = configuredProperty("spring.datasource.url", "");
@@ -127,30 +119,6 @@ class AgentWorkflowFullLiveTest {
     @Autowired
     private ObjectMapper objectMapper;
 
-    @SpyBean
-    private WorkflowEventHub workflowEventHub;
-
-    private SseEmitter activeSseEmitter;
-
-    @BeforeEach
-    void configureSseLogging() {
-        doAnswer(invocation -> {
-            String workflowId = invocation.getArgument(0);
-            String eventName = invocation.getArgument(1);
-            Object payload = invocation.getArgument(2);
-            log.info("SSE事件：工作流={}，事件={}（{}），内容={}",
-                    workflowId, eventName, describeSseEvent(eventName), json(payload));
-            return invocation.callRealMethod();
-        }).when(workflowEventHub).publish(anyString(), anyString(), any());
-    }
-
-    @AfterEach
-    void closeSseSubscription() {
-        if (activeSseEmitter != null) {
-            activeSseEmitter.complete();
-            activeSseEmitter = null;
-        }
-    }
     @Test
     void completesWorkflowFromStartThroughKycSupplementParallelAnalysisCfsAndCompliance() throws Exception {
         CurrentUserPrincipal manager = managerPrincipal();
@@ -165,9 +133,6 @@ class AgentWorkflowFullLiveTest {
                         "CFS-3P6-V1",
                         "Generate a complete customer service solution from the selected customer data."));
         logDuration("工作流启动", workflowStarted);
-        activeSseEmitter = workflowService.subscribe(manager, created.workflowId());
-        log.info("SSE订阅建立：工作流={}，开始接收后续事件", created.workflowId());
-
         WorkflowState initialKyc = awaitStatus(created.workflowId(), WorkflowStatus.WAITING_INPUT);
         logDuration("首次KYC分析", workflowStarted);
         AgentArtifact initialArtifact = latestArtifact(created.workflowId(), AgentType.CUSTOMER_INSIGHT);
@@ -176,7 +141,9 @@ class AgentWorkflowFullLiveTest {
                 .isEqualTo(AgentStatus.SUCCESS);
         assertThat(initialArtifact).isNotNull();
         assertThat(initialArtifact.getVersion()).isEqualTo(1);
-        assertThat(initialArtifact.getResult()).contains("\"contractVersion\":\"kyc-result.v2\"");
+        JsonNode result = objectMapper.readTree(initialArtifact.getResult());
+        assertThat(result.path("contractVersion").asText()).isEqualTo("kyc-result.v2");
+        assertThat(initialArtifact.getResult()).contains("kyc-result.v2");
 
         long supplementStarted = System.nanoTime();
         WorkflowDetailResponse supplementAccepted = workflowService.provideInput(
@@ -274,27 +241,6 @@ class AgentWorkflowFullLiveTest {
 
     private void logDuration(String phase, long startedNanos) {
         log.info("阶段完成：{}，耗时={}毫秒", phase, (System.nanoTime() - startedNanos) / 1_000_000);
-    }
-
-    private String describeSseEvent(String eventName) {
-        return switch (eventName) {
-            case "WORKFLOW_CREATED" -> "工作流已创建";
-            case "KYC_REGENERATION_REQUESTED" -> "已请求KYC再次分析";
-            case "KYC_ANALYSIS_COMPLETED" -> "KYC分析完成";
-            case "DOWNSTREAM_AGENTS_READY" -> "竞争分析和产品匹配已就绪";
-            case "COMPLIANCE_PASSED" -> "合规校验通过";
-            case "AGENT_PROGRESS" -> "Agent运行进度";
-            case "AGENT_FAILED" -> "Agent执行失败";
-            default -> "工作流事件";
-        };
-    }
-
-    private String json(Object payload) {
-        try {
-            return objectMapper.writeValueAsString(payload);
-        } catch (Exception exception) {
-            return String.valueOf(payload);
-        }
     }
     private WorkflowState awaitStatus(String workflowId, WorkflowStatus status) {
         Awaitility.await()

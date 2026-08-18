@@ -11,19 +11,21 @@ import com.privatebank.agent.config.AgentScopeProperties;
 import com.privatebank.agent.domain.downstream.CfsDesignInput;
 import com.privatebank.agent.domain.downstream.CfsDesignResult;
 import com.privatebank.business.enums.workflow.AgentType;
-import lombok.RequiredArgsConstructor;
+import io.agentscope.core.tool.Toolkit;
+import org.springframework.beans.factory.annotation.Autowired;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class CfsDesignAgentExecutor implements BusinessAgentExecutor<CfsDesignInput, CfsDesignResult> {
 
     private static final String SYSTEM_PROMPT = """
             你是私行 CFS 方案设计 Agent。
             基于 KYC、市场洞察和产品专家结果，按照 CFS“3+6”结构生成方案初稿。
             所有结论必须来自输入 Artifact，不得编造事实或证据。
+            生成客户信息章节时，必须调用 getCustomerProfile 工具获取脱敏后的客户资料；禁止编造客户身份信息。
+            人、企、家、社四维需求基于 KYC 结果由模型分析，可适当保留 KYC 内容；服务建议和附件基于所有上游 Agent 内容由模型分析。
             输出必须严格符合以下 CfsDesignResult 字段格式：
             {
               "customerId": string,
@@ -88,7 +90,27 @@ public class CfsDesignAgentExecutor implements BusinessAgentExecutor<CfsDesignIn
     private final StructuredAgentRuntime runtime;
     private final ObjectMapper objectMapper;
     private final AgentScopeProperties properties;
+    private final CustomerProfileTool customerProfileTool;
     private final CfsDesignResultValidator validator = new CfsDesignResultValidator();
+
+    @Autowired
+    public CfsDesignAgentExecutor(
+            StructuredAgentRuntime runtime,
+            ObjectMapper objectMapper,
+            AgentScopeProperties properties,
+            CustomerProfileTool customerProfileTool) {
+        this.runtime = runtime;
+        this.objectMapper = objectMapper;
+        this.properties = properties;
+        this.customerProfileTool = customerProfileTool;
+    }
+
+    public CfsDesignAgentExecutor(
+            StructuredAgentRuntime runtime,
+            ObjectMapper objectMapper,
+            AgentScopeProperties properties) {
+        this(runtime, objectMapper, properties, null);
+    }
 
     @Override
     public AgentType agentType() {
@@ -99,14 +121,23 @@ public class CfsDesignAgentExecutor implements BusinessAgentExecutor<CfsDesignIn
     public AgentExecutionResult<CfsDesignResult> execute(AgentExecutionRequest<CfsDesignInput> request) {
         String lastValidationError = null;
         int attempts = Math.max(1, properties.maxBusinessRepairAttempts());
+        long deadlineNanos = System.nanoTime() + properties.cfsTotalTimeout().toNanos();
+        Toolkit toolkit = customerProfileTool == null ? null : buildToolkit();
         for (int attempt = 1; attempt <= attempts; attempt++) {
+            if (System.nanoTime() > deadlineNanos) {
+                throw new IllegalArgumentException("CFS 方案生成总执行超时");
+            }
             StructuredAgentDefinition<CfsDesignResult> definition = new StructuredAgentDefinition<>(
                     "cfs-design-agent",
                     SYSTEM_PROMPT,
                     userPrompt(request.input(), lastValidationError),
                     CfsDesignResult.class,
-                    Math.max(1, properties.maxIterations()));
+                    Math.max(1, properties.maxIterations()),
+                    toolkit);
             AgentExecutionResult<CfsDesignResult> result = runtime.execute(request, definition);
+            if (System.nanoTime() > deadlineNanos) {
+                throw new IllegalArgumentException("CFS 方案生成总执行超时");
+            }
             try {
                 validator.validate(result.output());
                 return new AgentExecutionResult<>(result.output(), attempt, result.modelName());
@@ -118,6 +149,12 @@ public class CfsDesignAgentExecutor implements BusinessAgentExecutor<CfsDesignIn
         }
         throw new IllegalArgumentException(
                 "CFS 方案 Agent 连续返回不符合格式要求的结果：" + lastValidationError);
+    }
+
+    private Toolkit buildToolkit() {
+        Toolkit toolkit = new Toolkit();
+        toolkit.registerTool(customerProfileTool);
+        return toolkit;
     }
 
     private String userPrompt(CfsDesignInput input, String validationFailure) {

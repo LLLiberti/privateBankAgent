@@ -14,16 +14,15 @@ import com.privatebank.agent.domain.kyc.KycMaskedInput;
 import com.privatebank.agent.domain.kyc.KycOutputValidationException;
 import com.privatebank.agent.domain.kyc.KycStructuredResult;
 import com.privatebank.business.enums.workflow.AgentType;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class KycAgentExecutor implements BusinessAgentExecutor<KycMaskedInput, KycStructuredResult> {
 
-    private static final String SYSTEM_PROMPT = """
+    public static final String SYSTEM_PROMPT = """
             你是私行 KYC 专业分析 Agent。只能使用输入中已经脱敏的人、企、家、社数据，不得猜测、补充或还原任何真实身份信息。
             每项事实、风险等级、风险成因和建议都必须由结构化字段、受控语义标签或输入中已有的 SRC-* 证据支持。
             未核验、待确认、估算值或单位缺失的数据不得写成确定事实，应明确其不确定性并写入 dataGaps。
@@ -64,6 +63,29 @@ public class KycAgentExecutor implements BusinessAgentExecutor<KycMaskedInput, K
     private final KycOutputValidator outputValidator;
     private final ObjectMapper objectMapper;
     private final AgentScopeProperties properties;
+    private final String systemPrompt;
+
+    @Autowired
+    public KycAgentExecutor(
+            StructuredAgentRuntime runtime,
+            KycOutputValidator outputValidator,
+            ObjectMapper objectMapper,
+            AgentScopeProperties properties) {
+        this(runtime, outputValidator, objectMapper, properties, SYSTEM_PROMPT);
+    }
+
+    public KycAgentExecutor(
+            StructuredAgentRuntime runtime,
+            KycOutputValidator outputValidator,
+            ObjectMapper objectMapper,
+            AgentScopeProperties properties,
+            String systemPrompt) {
+        this.runtime = runtime;
+        this.outputValidator = outputValidator;
+        this.objectMapper = objectMapper;
+        this.properties = properties;
+        this.systemPrompt = systemPrompt;
+    }
 
     @Override
     public AgentType agentType() {
@@ -77,7 +99,7 @@ public class KycAgentExecutor implements BusinessAgentExecutor<KycMaskedInput, K
         for (int attempt = 1; attempt <= attempts; attempt++) {
             StructuredAgentDefinition<KycStructuredResult> definition = new StructuredAgentDefinition<>(
                     "kyc-agent",
-                    SYSTEM_PROMPT,
+                    systemPrompt,
                     userPrompt(request.input(), lastValidationError),
                     KycStructuredResult.class,
                     Math.max(1, properties.maxIterations()),
