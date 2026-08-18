@@ -74,8 +74,12 @@ public final class KycSensitiveTextPolicy {
     }
 
     public static boolean containsProhibitedTerm(String value, Collection<String> terms) {
+        return matchedProhibitedTerm(value, terms) != null;
+    }
+
+    private static String matchedProhibitedTerm(String value, Collection<String> terms) {
         if (value == null || terms == null || terms.isEmpty()) {
-            return false;
+            return null;
         }
         String normalized = normalizeText(value).toLowerCase(Locale.ROOT);
         String compact = compact(normalized);
@@ -91,20 +95,20 @@ public final class KycSensitiveTextPolicy {
             if (compactTerm.chars().allMatch(Character::isDigit)) {
                 if (Pattern.compile("(?<!\\d)" + Pattern.quote(compactTerm) + "(?!\\d)")
                         .matcher(compact).find()) {
-                    return true;
+                    return term;
                 }
             } else if (compactTerm.chars().allMatch(character -> character < 128
                     && Character.isLetterOrDigit(character))) {
                 if (Pattern.compile("(?<![\\p{L}\\p{N}])" + Pattern.quote(compactTerm)
                                 + "(?![\\p{L}\\p{N}])", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE)
                         .matcher(compact).find()) {
-                    return true;
+                    return term;
                 }
             } else if (compact.contains(compactTerm)) {
-                return true;
+                return term;
             }
         }
-        return false;
+        return null;
     }
 
     public static String replaceTerm(String value, String term, String replacement) {
@@ -146,13 +150,25 @@ public final class KycSensitiveTextPolicy {
     }
 
     public static void rejectInput(String value, String path, Collection<String> terms) {
-        if (containsProhibitedTerm(value, terms)) {
-            throw new KycInputValidationException("KYC 脱敏输入仍含直接标识信息: " + path);
+        String matchedTerm = matchedProhibitedTerm(value, terms);
+        if (matchedTerm != null) {
+            throw new KycInputValidationException(
+                    "KYC 脱敏输入仍含直接标识信息: " + path,
+                    "PROHIBITED_TERM_REMAINED",
+                    path,
+                    value,
+                    matchedTerm,
+                    "ENTITY_TERM");
         }
         String category = directIdentifierCategory(value);
         if (category != null) {
             throw new KycInputValidationException(
-                    "KYC 脱敏输入仍含格式型直接标识信息(" + category + "): " + path);
+                    "KYC 脱敏输入仍含格式型直接标识信息(" + category + "): " + path,
+                    "FORMATTED_IDENTIFIER_REMAINED",
+                    path,
+                    value,
+                    null,
+                    category);
         }
     }
 

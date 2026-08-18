@@ -38,7 +38,7 @@ class KycDataMaskingServiceTest {
         KycMaskedInput input = maskingService.mask(data);
         String payload = objectMapper.writeValueAsString(input.payload());
 
-        assertThat(input.payload()).containsEntry("contractVersion", "kyc-input.v5");
+        assertThat(input.payload()).containsEntry("contractVersion", "kyc-input.v6");
         assertThat(input.payload()).containsKey("dataCompleteness");
         assertThat(input.sha256()).matches("[0-9a-f]{64}");
         assertThat(input.prohibitedTerms()).contains("腾讯科技", "腾讯");
@@ -101,6 +101,35 @@ class KycDataMaskingServiceTest {
     }
 
     @Test
+    void acceptsInstructionEvidenceOrBothAndMasksThemBeforeModelBoundary() throws Exception {
+        KycCustomerData data = sampleData();
+
+        KycMaskedInput instructionOnly = maskingService.mask(data,
+                new KycRuntimeSupplement("请重点关注马化腾的流动性安排，电话13800138000", List.of()));
+        String instructionPayload = objectMapper.writeValueAsString(instructionOnly.payload());
+        assertThat(instructionOnly.payload()).containsKey("managerInstruction").doesNotContainKey("managerEvidence");
+        assertThat(instructionOnly.managerEvidenceRefs()).isEmpty();
+        assertThat(instructionPayload)
+                .contains("P-1", "[PHONE_REDACTED]")
+                .doesNotContain("马化腾", "13800138000");
+
+        KycMaskedInput evidenceOnly = maskingService.mask(data,
+                new KycRuntimeSupplement(null, List.of("马化腾确认腾讯科技近期存在流动性安排")));
+        String evidencePayload = objectMapper.writeValueAsString(evidenceOnly.payload());
+        assertThat(evidenceOnly.payload()).doesNotContainKey("managerInstruction").containsKey("managerEvidence");
+        assertThat(evidenceOnly.managerEvidenceRefs()).containsExactly("MGR-1");
+        assertThat(evidenceOnly.allowedEvidenceRefs()).contains("MGR-1", "SRC-1");
+        assertThat(evidencePayload)
+                .contains("MGR-1", "P-1", "E-1", "CUSTOMER_MANAGER_CONFIRMED", "CONFIRMED")
+                .doesNotContain("马化腾", "腾讯科技");
+
+        KycMaskedInput both = maskingService.mask(data,
+                new KycRuntimeSupplement("关注跨境配置", List.of("客户确认近期需要安排流动性")));
+        assertThat(both.payload()).containsKeys("managerInstruction", "managerEvidence");
+        assertThat(both.managerEvidenceRefs()).containsExactly("MGR-1");
+    }
+
+    @Test
     void projectsNeo4jRelationshipsWithoutLeakingGraphIdentifiers() throws Exception {
         KycCustomerData base = sampleData();
         KycCustomerData data = new KycCustomerData(
@@ -127,7 +156,7 @@ class KycDataMaskingServiceTest {
         List<Map<String, Object>> graph = (List<Map<String, Object>>) graphProjection.get("relationships");
         String payload = objectMapper.writeValueAsString(input.payload());
 
-        assertThat(input.payload()).containsEntry("contractVersion", "kyc-input.v5");
+        assertThat(input.payload()).containsEntry("contractVersion", "kyc-input.v6");
         assertThat(graphProjection)
                 .containsEntry("available", true)
                 .containsEntry("relationshipCount", 3)
@@ -194,7 +223,13 @@ class KycDataMaskingServiceTest {
         assertThatThrownBy(() -> validator.validate(
                 Map.of("contractVersion", "kyc-input.v5", "person", Map.of("rawText", "原始备注")), Set.of()))
                 .isInstanceOf(KycInputValidationException.class)
-                .hasMessageContaining("禁止字段");
+                .hasMessageContaining("禁止字段")
+                .satisfies(error -> {
+                    KycInputValidationException validation = (KycInputValidationException) error;
+                    assertThat(validation.reasonCode()).isEqualTo("PROHIBITED_FIELD");
+                    assertThat(validation.fieldPath()).isEqualTo("root.person.rawText");
+                    assertThat(validation.category()).isEqualTo("DIRECT_IDENTIFIER_FIELD");
+                });
         for (String field : List.of("birth_date", "school_name")) {
             assertThatThrownBy(() -> validator.validate(
                     Map.of("contractVersion", "kyc-input.v5", "person", Map.of(field, "某值")), Set.of()))
@@ -207,11 +242,29 @@ class KycDataMaskingServiceTest {
         assertThatThrownBy(() -> validator.validate(
                 Map.of("contractVersion", "kyc-input.v5", "person", Map.of("signal", "联系010-12345678")), Set.of()))
                 .isInstanceOf(KycInputValidationException.class)
-                .hasMessageContaining("直接标识信息");
+                .hasMessageContaining("直接标识信息")
+                .satisfies(error -> {
+                    KycInputValidationException validation = (KycInputValidationException) error;
+                    assertThat(validation.reasonCode()).isEqualTo("FORMATTED_IDENTIFIER_REMAINED");
+                    assertThat(validation.fieldPath()).isEqualTo("root.person.signal");
+                    assertThat(validation.rejectedValue()).isEqualTo("联系010-12345678");
+                    assertThat(validation.category()).isEqualTo("PHONE");
+                });
         assertThatThrownBy(() -> validator.validate(
                 Map.of("contractVersion", "kyc-input.v5", "person", Map.of("signal", "旧证件110105491231002")), Set.of()))
                 .isInstanceOf(KycInputValidationException.class)
                 .hasMessageContaining("直接标识信息");
+        assertThatThrownBy(() -> validator.validate(
+                Map.of("contractVersion", "kyc-input.v5", "person", Map.of("signal", "客户马化腾偏好长期配置")),
+                Set.of("马化腾")))
+                .isInstanceOf(KycInputValidationException.class)
+                .satisfies(error -> {
+                    KycInputValidationException validation = (KycInputValidationException) error;
+                    assertThat(validation.reasonCode()).isEqualTo("PROHIBITED_TERM_REMAINED");
+                    assertThat(validation.fieldPath()).isEqualTo("root.person.signal");
+                    assertThat(validation.matchedTerm()).isEqualTo("马化腾");
+                    assertThat(validation.category()).isEqualTo("ENTITY_TERM");
+                });
     }
 
     @Test

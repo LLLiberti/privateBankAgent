@@ -13,6 +13,7 @@ import java.util.Set;
 public record KycMaskedInput(
         Map<String, Object> payload,
         Map<String, Long> evidenceReferences,
+        Set<String> managerEvidenceRefs,
         Set<String> prohibitedTerms,
         Map<String, String> aliasMappings,
         String sha256) {
@@ -20,6 +21,7 @@ public record KycMaskedInput(
     public KycMaskedInput {
         payload = freezeMap(payload);
         evidenceReferences = Collections.unmodifiableMap(new LinkedHashMap<>(evidenceReferences));
+        managerEvidenceRefs = Collections.unmodifiableSet(new LinkedHashSet<>(managerEvidenceRefs));
         prohibitedTerms = Collections.unmodifiableSet(new LinkedHashSet<>(prohibitedTerms));
         aliasMappings = Collections.unmodifiableMap(new LinkedHashMap<>(aliasMappings));
     }
@@ -28,8 +30,23 @@ public record KycMaskedInput(
             Map<String, Object> payload,
             Map<String, Long> evidenceReferences,
             Set<String> prohibitedTerms,
+            Map<String, String> aliasMappings,
             String sha256) {
-        this(payload, evidenceReferences, prohibitedTerms, Map.of(), sha256);
+        this(payload, evidenceReferences, Set.of(), prohibitedTerms, aliasMappings, sha256);
+    }
+
+    public KycMaskedInput(
+            Map<String, Object> payload,
+            Map<String, Long> evidenceReferences,
+            Set<String> prohibitedTerms,
+            String sha256) {
+        this(payload, evidenceReferences, Set.of(), prohibitedTerms, Map.of(), sha256);
+    }
+
+    public Set<String> allowedEvidenceRefs() {
+        Set<String> allowed = new LinkedHashSet<>(evidenceReferences.keySet());
+        allowed.addAll(managerEvidenceRefs);
+        return Collections.unmodifiableSet(allowed);
     }
 
     private static Map<String, Object> freezeMap(Map<String, ?> source) {

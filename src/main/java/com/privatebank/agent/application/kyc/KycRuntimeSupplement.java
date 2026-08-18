@@ -1,16 +1,26 @@
 package com.privatebank.agent.application.kyc;
 
-import java.util.LinkedHashSet;
-import java.util.Set;
+import java.util.List;
 
-/** Process-local sanitized manager context; raw manager input never reaches persistence. */
-public record KycRuntimeSupplement(Set<String> signals) {
+/** Process-local manager context; it is masked before crossing the model boundary. */
+public record KycRuntimeSupplement(String description, List<String> confirmedItems) {
 
     public KycRuntimeSupplement {
-        signals = signals == null ? Set.of() : Set.copyOf(new LinkedHashSet<>(signals));
+        description = description == null || description.isBlank() ? null : description.trim();
+        confirmedItems = confirmedItems == null
+                ? List.of()
+                : confirmedItems.stream()
+                        .filter(item -> item != null && !item.isBlank())
+                        .map(String::trim)
+                        .distinct()
+                        .toList();
     }
 
     public static KycRuntimeSupplement empty() {
-        return new KycRuntimeSupplement(Set.of());
+        return new KycRuntimeSupplement(null, List.of());
+    }
+
+    public boolean isEmpty() {
+        return description == null && confirmedItems.isEmpty();
     }
 }
