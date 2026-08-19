@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.MissingNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.privatebank.business.dto.workflow.CustomerInsightAnalysisResponse.Analysis;
 import com.privatebank.business.dto.workflow.CustomerInsightAnalysisResponse.Finding;
+import com.privatebank.business.dto.workflow.CustomerInsightAnalysisResponse.FollowUpQuestion;
 import com.privatebank.business.dto.workflow.CustomerInsightAnalysisResponse.GraphAssessment;
 import org.junit.jupiter.api.Test;
 
@@ -46,6 +47,27 @@ class CustomerInsightAliasRestorerTest {
         assertThat(restored.findings().getFirst().evidenceRefs()).containsExactly("SRC-1", "P-1");
         assertThat(restored.graphAssessment().contribution()).isEqualTo("E-1");
         assertThat(restored.graphAssessment().evidenceRefs()).containsExactly("SRC-2", "E-1");
+    }
+
+    @Test
+    void restoresAliasesInFollowUpQuestions() {
+        Analysis analysis = new Analysis(
+                "MEDIUM",
+                "客户P-1关联E-1",
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of("缺少E-1材料"),
+                null,
+                List.of(new FollowUpQuestion("Q1", "P-1是否计划增加E-1相关配置？")));
+        var mappings = objectMapper.valueToTree(Map.of(
+                "P-1", "张三",
+                "E-1", "某科技公司"));
+
+        Analysis restored = restorer.restore(analysis, mappings, "ART-1");
+
+        assertThat(restored.followUpQuestions()).containsExactly(
+                new FollowUpQuestion("Q1", "张三是否计划增加某科技公司相关配置？"));
     }
 
     @Test

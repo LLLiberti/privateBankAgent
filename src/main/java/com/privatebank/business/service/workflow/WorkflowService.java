@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.privatebank.agent.domain.event.AgentExecutionRequestedEvent;
+import com.privatebank.agent.domain.kyc.KycQaItem;
 import com.privatebank.business.dto.common.PageResponse;
 import com.privatebank.business.common.exception.BusinessException;
 import com.privatebank.business.common.exception.ErrorCode;
@@ -318,12 +319,13 @@ public class WorkflowService {
                             "agentTypes", downstreamAgents, "status", workflow.getWorkflowStatus())));
         } else {
             requireSupplementForSupplementAction(request);
+            List<KycQaItem> qaItems = mergeQaHistory(current, request.answers());
             ready(workflowId, AgentType.CUSTOMER_INSIGHT, true);
             workflow.setWorkflowStatus(WorkflowStatus.RUNNING);
             workflow.setUpdatedAt(now);
             updateWorkflow(workflow);
             eventPublisher.publishEvent(new KycRegenerationRequestedEvent(
-                    workflowId, request.description(), request.confirmedItems()));
+                    workflowId, request.description(), request.confirmedItems(), qaItems));
             afterCommit(() -> eventHub.publish(workflowId, "KYC_REGENERATION_REQUESTED",
                     Map.of("workflowId", workflowId, "kycArtifactId", current.getArtifactId(),
                             "status", workflow.getWorkflowStatus())));
@@ -544,9 +546,84 @@ public class WorkflowService {
         boolean hasDescription = StringUtils.hasText(request.description());
         boolean hasConfirmedItem = request.confirmedItems() != null
                 && request.confirmedItems().stream().anyMatch(StringUtils::hasText);
-        if (!hasDescription && !hasConfirmedItem) {
+        boolean hasAnswer = request.answers() != null
+                && request.answers().stream().anyMatch(answer -> answer != null && StringUtils.hasText(answer.answer()));
+        if (!hasDescription && !hasConfirmedItem && !hasAnswer) {
             throw new BusinessException(HttpStatus.BAD_REQUEST, ErrorCode.INVALID_ARGUMENT,
-                    "补充KYC信息时必须提供补充说明或已确认事项");
+                    "补充KYC信息时必须提供补充说明、已确认事项或问题回答");
+        }
+    }
+
+    private List<KycQaItem> mergeQaHistory(AgentArtifact current, List<WorkflowInputRequest.Answer> answers) {
+        List<KycQaItem> merged = new ArrayList<>(extractQaHistory(current));
+        if (answers == null || answers.isEmpty()) {
+            return merged;
+        }
+        Map<String, CustomerInsightAnalysisResponse.FollowUpQuestion> questions = new java.util.LinkedHashMap<>();
+        for (CustomerInsightAnalysisResponse.FollowUpQuestion question : extractFollowUpQuestions(current)) {
+            questions.put(question.id(), question);
+        }
+        for (WorkflowInputRequest.Answer answer : answers) {
+            if (answer == null || !StringUtils.hasText(answer.answer())) {
+                continue;
+            }
+            CustomerInsightAnalysisResponse.FollowUpQuestion question = questions.get(answer.questionId());
+            if (question == null) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST, ErrorCode.INVALID_ARGUMENT,
+                        "问题ID不存在于当前客户洞察分析: " + answer.questionId());
+            }
+            KycQaItem item = new KycQaItem(question.id(), question.question(), answer.answer());
+            int existing = -1;
+            for (int i = 0; i < merged.size(); i++) {
+                if (question.id().equals(merged.get(i).questionId())) {
+                    existing = i;
+                    break;
+                }
+            }
+            if (existing >= 0) {
+                merged.set(existing, item);
+            } else {
+                merged.add(item);
+            }
+        }
+        return List.copyOf(merged);
+    }
+
+    private List<CustomerInsightAnalysisResponse.FollowUpQuestion> extractFollowUpQuestions(AgentArtifact artifact) {
+        if (!StringUtils.hasText(artifact.getResult())) {
+            return List.of();
+        }
+        try {
+            JsonNode analysis = objectMapper.readTree(artifact.getResult()).path("analysis");
+            JsonNode questions = analysis.path("followUpQuestions");
+            if (!questions.isArray()) {
+                return List.of();
+            }
+            return objectMapper.convertValue(questions, new TypeReference<List<CustomerInsightAnalysisResponse.FollowUpQuestion>>() {});
+        } catch (JsonProcessingException exception) {
+            return List.of();
+        }
+    }
+
+    private List<KycQaItem> extractQaHistory(AgentArtifact artifact) {
+        if (!StringUtils.hasText(artifact.getResult())) {
+            return List.of();
+        }
+        try {
+            JsonNode history = objectMapper.readTree(artifact.getResult()).path("qaHistory");
+            if (!history.isArray()) {
+                return List.of();
+            }
+            List<KycQaItem> items = new ArrayList<>();
+            for (JsonNode node : history) {
+                items.add(new KycQaItem(
+                        node.path("questionId").asText(null),
+                        node.path("question").asText(null),
+                        node.path("answer").asText(null)));
+            }
+            return items;
+        } catch (JsonProcessingException exception) {
+            return List.of();
         }
     }
 

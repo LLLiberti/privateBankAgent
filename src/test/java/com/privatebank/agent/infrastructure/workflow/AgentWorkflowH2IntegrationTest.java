@@ -106,13 +106,13 @@ class AgentWorkflowH2IntegrationTest {
                 .isEqualTo(WorkflowStatus.RUNNING);
 
         kycExecutionService.execute(created.workflowId(),
-                new KycRuntimeSupplement(Set.of("待确认的客户经理信号")));
+                new KycRuntimeSupplement(null, List.of("待确认的客户经理信号")));
         AgentArtifact secondKyc = latest(created.workflowId(), AgentType.CUSTOMER_INSIGHT);
         assertKyc(secondKyc, 2);
         assertThat(secondKyc.getArtifactId()).isNotEqualTo(firstKyc.getArtifactId());
         assertThat(secondKyc.getResult()).doesNotContain(MANAGER_DESCRIPTION);
         verify(maskingService).mask(any(KycCustomerData.class),
-                eq(new KycRuntimeSupplement(Set.of("待确认的客户经理信号"))));
+                eq(new KycRuntimeSupplement(null, List.of("待确认的客户经理信号"))));
 
         workflowService.provideInput(manager, created.workflowId(), "IDEMPOTENCY-3",
                 new WorkflowInputRequest(WorkflowInputRequest.Action.CONTINUE, secondKyc.getArtifactId(), null, null));

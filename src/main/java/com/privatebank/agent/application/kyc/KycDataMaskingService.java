@@ -6,6 +6,7 @@ import com.privatebank.agent.domain.kyc.KycCustomerData;
 import com.privatebank.agent.domain.kyc.KycGraphRelationship;
 import com.privatebank.agent.domain.kyc.KycInputValidationException;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
+import com.privatebank.agent.domain.kyc.KycQaItem;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
@@ -138,8 +139,45 @@ public class KycDataMaskingService {
             evidence.add(record);
             managerEvidenceRefs.add(evidenceRef);
         }
+
+        List<Map<String, Object>> qaList = new ArrayList<>();
+        for (KycQaItem qa : supplement.qaItems()) {
+            if (!qa.hasAnswer()) {
+                continue;
+            }
+            String question = qa.question() == null ? "" : sanitizeText(qa.question(), context).trim();
+            String answer = sanitizeText(qa.answer(), context).trim();
+            if (answer.isEmpty()) {
+                continue;
+            }
+            String statement = question.isEmpty() ? answer : question + "：" + answer;
+            if (statement.codePointCount(0, statement.length()) > 128) {
+                context.omit("managerQa[" + qaList.size() + "].answer", "TEXT_TRUNCATED");
+                statement = KycSensitiveTextPolicy.truncateCodePoints(statement, 128);
+            }
+            String evidenceRef = "MGR-" + (evidence.size() + 1);
+            Map<String, Object> record = new LinkedHashMap<>();
+            record.put("evidenceRef", evidenceRef);
+            record.put("statement", statement);
+            record.put("sourceType", "CUSTOMER_MANAGER_QA");
+            record.put("verificationStatus", "CONFIRMED");
+            evidence.add(record);
+            managerEvidenceRefs.add(evidenceRef);
+
+            Map<String, Object> qaRecord = new LinkedHashMap<>();
+            qaRecord.put("questionId", qa.questionId());
+            if (!question.isEmpty()) {
+                qaRecord.put("question", question);
+            }
+            qaRecord.put("answer", answer);
+            qaRecord.put("evidenceRef", evidenceRef);
+            qaList.add(qaRecord);
+        }
         if (!evidence.isEmpty()) {
             payload.put("managerEvidence", evidence);
+        }
+        if (!qaList.isEmpty()) {
+            payload.put("managerQa", qaList);
         }
     }
 

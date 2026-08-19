@@ -18,6 +18,7 @@ import com.privatebank.business.entity.workflow.AgentState;
 import com.privatebank.business.entity.workflow.WorkflowState;
 import com.privatebank.business.entity.workflow.WorkflowReview;
 import com.privatebank.agent.domain.event.AgentExecutionRequestedEvent;
+import com.privatebank.agent.domain.kyc.KycQaItem;
 import com.privatebank.business.enums.auth.RoleName;
 import com.privatebank.business.enums.workflow.AgentStatus;
 import com.privatebank.business.enums.workflow.AgentType;
@@ -169,6 +170,79 @@ class WorkflowServiceKycReviewTest {
                 "WF-1", "请补充客户近期流动性安排", List.of("近期流动性安排")));
         verify(fixture.artifactMapper, never()).insert(any(AgentArtifact.class));
         verify(fixture.eventPublisher, never()).publishEvent(any(DownstreamAgentsReadyEvent.class));
+    }
+
+    @Test
+    void regeneratesKycWithAnswersAndPreservesQaHistory() {
+        Fixture fixture = fixture();
+        WorkflowState workflow = workflow();
+        AgentArtifact current = kycArtifact("ART-1", 1);
+        current.setResult("""
+                {"contractVersion":"kyc-result.v2","analysis":{
+                  "riskLevel":"MEDIUM","summary":"已有分析","findings":[],"riskAlerts":[],
+                  "recommendedActions":[],"dataGaps":["缺少流动性安排"],
+                  "followUpQuestions":[
+                    {"id":"Q1","question":"P-1近期是否有流动性安排？"},
+                    {"id":"Q2","question":"P-1是否有跨境配置需求？"}
+                  ],
+                  "graphAssessment":{"contribution":"NOT_AVAILABLE","summary":"无图谱","evidenceRefs":[]}
+                },"qaHistory":[
+                  {"questionId":"Q1","question":"P-1近期是否有流动性安排？","answer":"旧回答"}
+                ]}
+                """);
+        AgentState kycState = agentState(AgentType.CUSTOMER_INSIGHT, AgentStatus.SUCCESS);
+        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
+        when(fixture.artifactMapper.selectById("ART-1")).thenReturn(current);
+        when(fixture.artifactMapper.selectOne(anyArtifactQuery())).thenReturn(current);
+        when(fixture.agentStateMapper.selectOne(anyAgentStateQuery())).thenReturn(kycState);
+        when(fixture.agentStateMapper.updateById(any(AgentState.class))).thenReturn(1);
+        when(fixture.workflowMapper.updateById(any(WorkflowState.class))).thenReturn(1);
+        when(fixture.agentStateMapper.selectList(anyAgentStateQuery())).thenReturn(List.of(kycState));
+
+        var response = fixture.service.provideInput(principal(), "WF-1", "answer-key",
+                new WorkflowInputRequest(WorkflowInputRequest.Action.SUPPLEMENT, "ART-1",
+                        null, List.of(),
+                        List.of(
+                                new WorkflowInputRequest.Answer("Q1", "新回答：近期有流动性安排"),
+                                new WorkflowInputRequest.Answer("Q2", "没有跨境配置需求"))));
+
+        assertThat(response.workflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
+        ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(fixture.eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue()).isEqualTo(new KycRegenerationRequestedEvent(
+                "WF-1", null, List.of(),
+                List.of(
+                        new KycQaItem("Q1", "P-1近期是否有流动性安排？", "新回答：近期有流动性安排"),
+                        new KycQaItem("Q2", "P-1是否有跨境配置需求？", "没有跨境配置需求"))));
+        verify(fixture.artifactMapper, never()).insert(any(AgentArtifact.class));
+    }
+
+    @Test
+    void rejectsAnswerForUnknownQuestionId() {
+        Fixture fixture = fixture();
+        WorkflowState workflow = workflow();
+        AgentArtifact current = kycArtifact("ART-1", 1);
+        current.setResult("""
+                {"contractVersion":"kyc-result.v2","analysis":{
+                  "riskLevel":"MEDIUM","summary":"已有分析","findings":[],"riskAlerts":[],
+                  "recommendedActions":[],"dataGaps":[],
+                  "followUpQuestions":[{"id":"Q1","question":"P-1近期是否有流动性安排？"}],
+                  "graphAssessment":{"contribution":"NOT_AVAILABLE","summary":"无图谱","evidenceRefs":[]}
+                }}
+                """);
+        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
+        when(fixture.artifactMapper.selectById("ART-1")).thenReturn(current);
+        when(fixture.artifactMapper.selectOne(anyArtifactQuery())).thenReturn(current);
+
+        assertThatThrownBy(() -> fixture.service.provideInput(principal(), "WF-1", "bad-answer-key",
+                new WorkflowInputRequest(WorkflowInputRequest.Action.SUPPLEMENT, "ART-1",
+                        null, List.of(),
+                        List.of(new WorkflowInputRequest.Answer("Q9", "不存在的问题")))))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("问题ID不存在于当前客户洞察分析");
+
+        verify(fixture.agentStateMapper, never()).updateById(any(AgentState.class));
+        verify(fixture.eventPublisher, never()).publishEvent(any(KycRegenerationRequestedEvent.class));
     }
 
     @Test

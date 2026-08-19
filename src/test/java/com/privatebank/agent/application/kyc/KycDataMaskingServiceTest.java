@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.privatebank.agent.domain.kyc.KycCustomerData;
 import com.privatebank.agent.domain.kyc.KycInputValidationException;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
+import com.privatebank.agent.domain.kyc.KycQaItem;
 import com.privatebank.agent.domain.kyc.KycGraphRelationship;
 import com.privatebank.business.dto.customer.CustomerSummaryResponse;
 import org.junit.jupiter.api.Test;
@@ -127,6 +128,24 @@ class KycDataMaskingServiceTest {
                 new KycRuntimeSupplement("关注跨境配置", List.of("客户确认近期需要安排流动性")));
         assertThat(both.payload()).containsKeys("managerInstruction", "managerEvidence");
         assertThat(both.managerEvidenceRefs()).containsExactly("MGR-1");
+    }
+
+    @Test
+    void masksQaAnswersAsManagerEvidenceAndManagerQa() throws Exception {
+        KycCustomerData data = sampleData();
+
+        KycMaskedInput input = maskingService.mask(data,
+                new KycRuntimeSupplement(null, List.of(),
+                        List.of(new KycQaItem("Q1", "P-1近期是否有流动性安排？",
+                                "马化腾确认近期有流动性安排"))));
+        String payload = objectMapper.writeValueAsString(input.payload());
+
+        assertThat(input.payload()).containsKey("managerEvidence").containsKey("managerQa");
+        assertThat(input.managerEvidenceRefs()).containsExactly("MGR-1");
+        assertThat(input.allowedEvidenceRefs()).contains("MGR-1");
+        assertThat(payload)
+                .contains("MGR-1", "Q1", "P-1", "CUSTOMER_MANAGER_QA", "CONFIRMED")
+                .doesNotContain("马化腾");
     }
 
     @Test

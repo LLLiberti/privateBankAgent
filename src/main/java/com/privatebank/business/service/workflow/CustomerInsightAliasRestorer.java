@@ -3,6 +3,7 @@ package com.privatebank.business.service.workflow;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.privatebank.business.dto.workflow.CustomerInsightAnalysisResponse.Analysis;
 import com.privatebank.business.dto.workflow.CustomerInsightAnalysisResponse.Finding;
+import com.privatebank.business.dto.workflow.CustomerInsightAnalysisResponse.FollowUpQuestion;
 import com.privatebank.business.dto.workflow.CustomerInsightAnalysisResponse.GraphAssessment;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -36,7 +37,8 @@ public class CustomerInsightAliasRestorer {
                 restoreTexts(analysis.riskAlerts(), mappings),
                 restoreTexts(analysis.recommendedActions(), mappings),
                 restoreTexts(analysis.dataGaps(), mappings),
-                restoreGraphAssessment(analysis.graphAssessment(), mappings));
+                restoreGraphAssessment(analysis.graphAssessment(), mappings),
+                restoreFollowUpQuestions(analysis.followUpQuestions(), mappings));
     }
 
     private Map<String, String> readMappings(JsonNode mappingsNode, String artifactId) {
@@ -94,6 +96,16 @@ public class CustomerInsightAliasRestorer {
                 assessment.contribution(),
                 restoreText(assessment.summary(), mappings),
                 assessment.evidenceRefs());
+    }
+
+    private List<FollowUpQuestion> restoreFollowUpQuestions(
+            List<FollowUpQuestion> questions, Map<String, String> mappings) {
+        if (questions == null) {
+            return null;
+        }
+        return questions.stream().map(question -> question == null ? null : new FollowUpQuestion(
+                question.id(),
+                restoreText(question.question(), mappings))).toList();
     }
 
     private String restoreText(String text, Map<String, String> mappings) {

@@ -100,7 +100,7 @@ class KycAgentExecutorTest {
         assertThat(captured.get().name()).isEqualTo("kyc-agent");
         assertThat(captured.get().outputType()).isEqualTo(KycStructuredResult.class);
         assertThat(captured.get().systemPrompt()).contains(
-                "SRC-*", "不得猜测", "dataGaps", "graphAssessment",
+                "SRC-*", "不得猜测", "dataGaps", "graphAssessment", "followUpQuestions",
                 "managerInstruction", "managerEvidence", "MGR-*", "evidenceRefs 最多 10 项",
                 "不得根据出生年份", "dataCompleteness");
         assertThat(captured.get().userPrompt()).contains("customer", "riskLevel");
@@ -204,6 +204,34 @@ class KycAgentExecutorTest {
         assertThatThrownBy(() -> executor(runtime(new AtomicInteger(), invalid), 1).execute(request()))
                 .isInstanceOf(KycGenerationException.class)
                 .hasRootCauseMessage("findings[0].evidenceRefs 至少包含一项证据");
+    }
+
+    @Test
+    void acceptsFollowUpQuestionsWhenPresent() {
+        KycStructuredResult result = new KycStructuredResult(
+                KycStructuredResult.RiskLevel.HIGH,
+                "已有结论",
+                List.of(new KycStructuredResult.Finding(
+                        KycStructuredResult.Dimension.PERSON,
+                        KycStructuredResult.RiskLevel.HIGH,
+                        "资产风险偏高",
+                        List.of("SRC-1"))),
+                List.of("风险偏高"),
+                List.of("复核风险偏好"),
+                List.of("缺少流动性安排"),
+                new KycStructuredResult.GraphAssessment(
+                        KycStructuredResult.GraphContribution.NOT_AVAILABLE,
+                        "当前没有可用的 Neo4j 关系投影",
+                        List.of()),
+                List.of(new KycStructuredResult.FollowUpQuestion(
+                        "Q1", "P-1近期是否有流动性安排？")));
+
+        AgentExecutionResult<KycStructuredResult> executionResult = executor(
+                runtime(new AtomicInteger(), result), 1).execute(request());
+
+        assertThat(executionResult.output().followUpQuestions())
+                .containsExactly(new KycStructuredResult.FollowUpQuestion(
+                        "Q1", "P-1近期是否有流动性安排？"));
     }
 
     @Test
