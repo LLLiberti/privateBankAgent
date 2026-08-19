@@ -20,6 +20,7 @@ import com.privatebank.agent.infrastructure.workflow.AgentWorkflowStateService;
 import com.privatebank.agent.infrastructure.agentscope.AgentScopeExecutionEngine;
 import com.privatebank.agent.domain.kyc.KycCustomerData;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
+import com.privatebank.agent.domain.kyc.KycQaItem;
 import com.privatebank.agent.domain.kyc.KycOutputValidationException;
 import com.privatebank.business.common.idempotency.IdempotencyExecutor;
 import com.privatebank.business.common.exception.BusinessException;
@@ -155,6 +156,9 @@ class KycDatabaseWorkflowLiveTest {
     @org.springframework.beans.factory.annotation.Autowired
     private ObjectMapper objectMapper;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private TimingAgentScopeExecutionEngine timingEngine;
+
     @Test
     void executesManagerSupplementRegenerationAndApprovalFlowAgainstLiveDatabaseAndModel() throws Exception {
         long testStartedNanos = System.nanoTime();
@@ -196,7 +200,9 @@ class KycDatabaseWorkflowLiveTest {
                 created.workflowId(), created.workflowStatus());
 
         WorkflowState workflow = timed(workflowId, "WAIT_INITIAL_KYC_ANALYSIS", testStartedNanos,
-                () -> awaitKycOutcome(created.workflowId()));
+                () -> awaitKycOutcome(created.workflowId()),
+                ignored -> timingEngine.modelMs(created.workflowId(), kycState(created.workflowId()).getExecutionId())
+                        .orElse(0L));
         AgentState kycState = kycState(created.workflowId());
         AgentArtifact artifact = latestKycArtifact(created.workflowId());
 
@@ -222,12 +228,18 @@ class KycDatabaseWorkflowLiveTest {
             assertThat(savedResult.path("model").asText()).isEqualTo(MODEL);
             assertThat(initialAnalysis.fieldNames()).toIterable().containsExactlyInAnyOrder(
                     "riskLevel", "summary", "findings", "riskAlerts", "recommendedActions", "dataGaps",
-                    "graphAssessment");
+                    "graphAssessment", "followUpQuestions");
             for (String prohibitedValue : expectedMaskedInput.prohibitedTerms()) {
                 assertThat(artifact.getResult()).doesNotContain(prohibitedValue);
             }
             return initialAnalysis;
         });
+        JsonNode followUpQuestions = analysis.path("followUpQuestions");
+        assertThat(followUpQuestions.isArray() && !followUpQuestions.isEmpty())
+                .as("live KYC should return follow-up questions for Q&A flow")
+                .isTrue();
+        System.out.printf("[KYC agent runtime] phase=FOLLOW_UP_QUESTIONS_READY workflowId=%s questions=%s%n",
+                created.workflowId(), followUpQuestions);
         System.out.printf("[KYC agent runtime] phase=ARTIFACT_VALIDATED workflowId=%s agentStatus=%s decision=kyc-result-is-ready-for-manager-confirmation%n",
                 created.workflowId(), kycState.getAgentStatus());
 
@@ -247,14 +259,24 @@ class KycDatabaseWorkflowLiveTest {
         });
 
         String rawManagerSupplement = "LIVE_RUNTIME_SUPPLEMENT_DO_NOT_PERSIST_20260812";
-        List<String> confirmedItems = List.of("客户近期存在流动性安排需求");
+        List<WorkflowInputRequest.Answer> answers = new java.util.ArrayList<>();
+        List<KycQaItem> qaItems = new java.util.ArrayList<>();
+        for (JsonNode question : followUpQuestions) {
+            String questionId = question.path("id").asText();
+            String answer = "客户经理已确认：" + question.path("question").asText();
+            answers.add(new WorkflowInputRequest.Answer(questionId, answer));
+            qaItems.add(new KycQaItem(
+                    questionId,
+                    question.path("question").asText(),
+                    answer));
+        }
         KycMaskedInput regeneratedMaskedInput = timed(workflowId, "PROJECT_RUNTIME_SUPPLEMENT", testStartedNanos, () -> {
-            KycRuntimeSupplement supplement = new KycRuntimeSupplement(rawManagerSupplement, confirmedItems);
+            KycRuntimeSupplement supplement = new KycRuntimeSupplement(rawManagerSupplement, List.of(), qaItems);
             KycMaskedInput maskedInput = dataMaskingService.mask(rawCustomerData, supplement);
             assertThat(objectMapper.writeValueAsString(maskedInput.payload()))
                     .contains("managerInstruction", rawManagerSupplement,
-                            "managerEvidence", "MGR-1", "客户近期存在流动性安排需求");
-            assertThat(maskedInput.managerEvidenceRefs()).containsExactly("MGR-1");
+                            "managerQa", "managerEvidence", "MGR-1", "CUSTOMER_MANAGER_QA");
+            assertThat(maskedInput.managerEvidenceRefs()).hasSize(qaItems.size());
             return maskedInput;
         });
 
@@ -267,7 +289,8 @@ class KycDatabaseWorkflowLiveTest {
                                 WorkflowInputRequest.Action.SUPPLEMENT,
                                 artifact.getArtifactId(),
                                 rawManagerSupplement,
-                                confirmedItems)));
+                                List.of(),
+                                answers)));
         timed(workflowId, "VERIFY_SUPPLEMENT_ACCEPTED", testStartedNanos, () -> {
             assertThat(supplementAccepted.workflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
             assertThat(agentState(supplementAccepted, AgentType.CUSTOMER_INSIGHT).agentStatus()).isEqualTo(AgentStatus.READY);
@@ -277,7 +300,9 @@ class KycDatabaseWorkflowLiveTest {
                 created.workflowId());
 
         WorkflowState regeneratedWorkflow = timed(workflowId, "WAIT_REGENERATED_KYC_ANALYSIS", testStartedNanos,
-                () -> awaitKycOutcome(created.workflowId()));
+                () -> awaitKycOutcome(created.workflowId()),
+                ignored -> timingEngine.modelMs(created.workflowId(), kycState(created.workflowId()).getExecutionId())
+                        .orElse(0L));
         AgentState regeneratedKycState = kycState(created.workflowId());
         AgentArtifact regeneratedArtifact = latestKycArtifact(created.workflowId());
         timed(workflowId, "VALIDATE_REGENERATED_KYC_ARTIFACT", testStartedNanos, () -> {
@@ -355,28 +380,41 @@ class KycDatabaseWorkflowLiveTest {
     }
 
     private <T> T timed(String workflowId, String step, long testStartedNanos, TimedOperation<T> operation) throws Exception {
+        return timed(workflowId, step, testStartedNanos, operation, ignored -> 0L);
+    }
+
+    private <T> T timed(String workflowId, String step, long testStartedNanos, TimedOperation<T> operation,
+                        java.util.function.Function<T, Long> modelMsExtractor) throws Exception {
         long stepStartedNanos = System.nanoTime();
-        logTiming("START", step, workflowId, stepStartedNanos, testStartedNanos, "RUNNING");
+        logTiming("START", step, workflowId, stepStartedNanos, testStartedNanos, "RUNNING", 0L);
         try {
             T result = operation.execute();
-            logTiming("END", step, workflowId, stepStartedNanos, testStartedNanos, "SUCCESS");
+            long modelMs = modelMsExtractor.apply(result);
+            logTiming("END", step, workflowId, stepStartedNanos, testStartedNanos, "SUCCESS", modelMs);
             return result;
         } catch (RuntimeException | Error exception) {
             logTiming("END", step, workflowId, stepStartedNanos, testStartedNanos,
-                    "FAILED:" + exception.getClass().getSimpleName());
+                    "FAILED:" + exception.getClass().getSimpleName(), 0L);
             throw exception;
         } catch (Exception exception) {
             logTiming("END", step, workflowId, stepStartedNanos, testStartedNanos,
-                    "FAILED:" + exception.getClass().getSimpleName());
+                    "FAILED:" + exception.getClass().getSimpleName(), 0L);
             throw exception;
         }
     }
 
     private void logTiming(String event, String step, String workflowId, long stepStartedNanos,
                            long testStartedNanos, String outcome) {
+        logTiming(event, step, workflowId, stepStartedNanos, testStartedNanos, outcome, 0L);
+    }
+
+    private void logTiming(String event, String step, String workflowId, long stepStartedNanos,
+                           long testStartedNanos, String outcome, long modelMs) {
         long now = System.nanoTime();
-        System.out.printf("[KYC live test timing] event=%s step=%s workflowId=%s stepElapsedMs=%d totalElapsedMs=%d outcome=%s%n",
-                event, step, workflowId, nanosToMillis(now - stepStartedNanos),
+        long stepElapsedMs = nanosToMillis(now - stepStartedNanos);
+        long deterministicMs = Math.max(0L, stepElapsedMs - modelMs);
+        System.out.printf("[KYC live test timing] event=%s step=%s workflowId=%s stepElapsedMs=%d modelMs=%d deterministicMs=%d totalElapsedMs=%d outcome=%s%n",
+                event, step, workflowId, stepElapsedMs, modelMs, deterministicMs,
                 nanosToMillis(now - testStartedNanos), outcome);
     }
 
@@ -448,7 +486,7 @@ class KycDatabaseWorkflowLiveTest {
         assertThat(result.path("model").asText()).isEqualTo(MODEL);
         assertThat(analysis.fieldNames()).toIterable().containsExactlyInAnyOrder(
                 "riskLevel", "summary", "findings", "riskAlerts", "recommendedActions", "dataGaps",
-                "graphAssessment");
+                "graphAssessment", "followUpQuestions");
         assertThat(artifact.getResult()).doesNotContain(rawManagerSupplement);
         for (String prohibitedValue : maskedInput.prohibitedTerms()) {
             assertThat(artifact.getResult()).doesNotContain(prohibitedValue);
@@ -536,8 +574,15 @@ class KycDatabaseWorkflowLiveTest {
         }
 
         @Bean
+        @org.springframework.context.annotation.Primary
+        TimingAgentScopeExecutionEngine timingAgentScopeExecutionEngine(
+                AgentScopeExecutionEngine delegate) {
+            return new TimingAgentScopeExecutionEngine(delegate);
+        }
+
+        @Bean
         KycAgentExecutor kycAgentExecutor(
-                AgentScopeExecutionEngine runtime,
+                com.privatebank.agent.application.runtime.StructuredAgentRuntime runtime,
                 KycOutputValidator validator,
                 ObjectMapper objectMapper,
                 AgentScopeProperties properties) {
