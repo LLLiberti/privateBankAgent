@@ -9,7 +9,24 @@ public record KycStructuredResult(
         List<String> riskAlerts,
         List<String> recommendedActions,
         List<String> dataGaps,
-        GraphAssessment graphAssessment) {
+        GraphAssessment graphAssessment,
+        List<FollowUpQuestion> followUpQuestions) {
+
+    public KycStructuredResult {
+        followUpQuestions = followUpQuestions == null ? List.of() : List.copyOf(followUpQuestions);
+    }
+
+    public KycStructuredResult(
+            RiskLevel riskLevel,
+            String summary,
+            List<Finding> findings,
+            List<String> riskAlerts,
+            List<String> recommendedActions,
+            List<String> dataGaps,
+            GraphAssessment graphAssessment) {
+        this(riskLevel, summary, findings, riskAlerts, recommendedActions, dataGaps,
+                graphAssessment, List.of());
+    }
 
     public record Finding(
             Dimension dimension,
@@ -22,6 +39,11 @@ public record KycStructuredResult(
             GraphContribution contribution,
             String summary,
             List<String> evidenceRefs) {
+    }
+
+    public record FollowUpQuestion(
+            String id,
+            String question) {
     }
 
     public enum RiskLevel {

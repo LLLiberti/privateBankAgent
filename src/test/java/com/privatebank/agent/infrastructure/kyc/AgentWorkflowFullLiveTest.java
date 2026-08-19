@@ -4,6 +4,8 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.privatebank.business.dto.workflow.CreateWorkflowRequest;
+import com.privatebank.business.dto.workflow.ReviewRequest;
+import com.privatebank.business.dto.workflow.ReviewResponse;
 import com.privatebank.business.dto.workflow.WorkflowDetailResponse;
 import com.privatebank.business.dto.workflow.WorkflowInputRequest;
 import com.privatebank.business.dto.workflow.WorkflowCreatedResponse;
@@ -28,6 +30,9 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.core.env.PropertySource;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -119,6 +124,9 @@ class AgentWorkflowFullLiveTest {
     @Autowired
     private ObjectMapper objectMapper;
 
+    @Autowired
+    private TimingAgentScopeExecutionEngine timingEngine;
+
     @Test
     void completesWorkflowFromStartThroughKycSupplementParallelAnalysisCfsAndCompliance() throws Exception {
         CurrentUserPrincipal manager = managerPrincipal();
@@ -134,16 +142,29 @@ class AgentWorkflowFullLiveTest {
                         "Generate a complete customer service solution from the selected customer data."));
         logDuration("工作流启动", workflowStarted);
         WorkflowState initialKyc = awaitStatus(created.workflowId(), WorkflowStatus.WAITING_INPUT);
-        logDuration("首次KYC分析", workflowStarted);
+        AgentState initialKycState = agentState(created.workflowId(), AgentType.CUSTOMER_INSIGHT);
+        logPhase("首次KYC分析", workflowStarted, created.workflowId(), initialKycState.getExecutionId());
         AgentArtifact initialArtifact = latestArtifact(created.workflowId(), AgentType.CUSTOMER_INSIGHT);
         assertThat(initialKyc.getWorkflowStatus()).isEqualTo(WorkflowStatus.WAITING_INPUT);
-        assertThat(agentState(created.workflowId(), AgentType.CUSTOMER_INSIGHT).getAgentStatus())
-                .isEqualTo(AgentStatus.SUCCESS);
+        assertThat(initialKycState.getAgentStatus()).isEqualTo(AgentStatus.SUCCESS);
         assertThat(initialArtifact).isNotNull();
         assertThat(initialArtifact.getVersion()).isEqualTo(1);
         JsonNode result = objectMapper.readTree(initialArtifact.getResult());
         assertThat(result.path("contractVersion").asText()).isEqualTo("kyc-result.v2");
         assertThat(initialArtifact.getResult()).contains("kyc-result.v2");
+
+        JsonNode followUpQuestions = result.path("analysis").path("followUpQuestions");
+        assertThat(followUpQuestions.isArray() && !followUpQuestions.isEmpty())
+                .as("live KYC should return follow-up questions for Q&A flow")
+                .isTrue();
+        log.info("Agent追问：{}", followUpQuestions);
+
+        List<WorkflowInputRequest.Answer> answers = new java.util.ArrayList<>();
+        for (JsonNode question : followUpQuestions) {
+            answers.add(new WorkflowInputRequest.Answer(
+                    question.path("id").asText(),
+                    "客户经理已确认：" + question.path("question").asText()));
+        }
 
         long supplementStarted = System.nanoTime();
         WorkflowDetailResponse supplementAccepted = workflowService.provideInput(
@@ -154,16 +175,18 @@ class AgentWorkflowFullLiveTest {
                         WorkflowInputRequest.Action.SUPPLEMENT,
                         initialArtifact.getArtifactId(),
                         RAW_SUPPLEMENT,
-                        List.of("liquidity need")));
+                        List.of(),
+                        answers));
         assertThat(supplementAccepted.workflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
         logDuration("客户经理补充提交", supplementStarted);
 
         WorkflowState regenerated = awaitStatus(created.workflowId(), WorkflowStatus.WAITING_INPUT);
+        AgentState regeneratedKycState = agentState(created.workflowId(), AgentType.CUSTOMER_INSIGHT);
         AgentArtifact regeneratedArtifact = latestArtifact(created.workflowId(), AgentType.CUSTOMER_INSIGHT);
         assertThat(regenerated.getWorkflowStatus()).isEqualTo(WorkflowStatus.WAITING_INPUT);
         assertThat(regeneratedArtifact.getVersion()).isEqualTo(2);
         assertThat(regeneratedArtifact.getResult()).doesNotContain(RAW_SUPPLEMENT);
-        logDuration("二次KYC分析", supplementStarted);
+        logPhase("二次KYC分析", supplementStarted, created.workflowId(), regeneratedKycState.getExecutionId());
 
         long approvalStarted = System.nanoTime();
         WorkflowDetailResponse managerApproved = workflowService.provideInput(
@@ -188,18 +211,33 @@ class AgentWorkflowFullLiveTest {
         long cfsStarted = System.nanoTime();
         awaitAgentSuccess(created.workflowId(), AgentType.SOLUTION_DESIGN);
         AgentArtifact cfs = assertSuccessWithArtifact(created.workflowId(), AgentType.SOLUTION_DESIGN);
-        logDuration("CFS生成", cfsStarted);
+        logPhase("CFS生成", cfsStarted, created.workflowId(),
+                agentState(created.workflowId(), AgentType.SOLUTION_DESIGN).getExecutionId());
 
         long complianceStarted = System.nanoTime();
         awaitAgentSuccess(created.workflowId(), AgentType.COMPLIANCE_CHECK);
         AgentArtifact compliance = assertSuccessWithArtifact(created.workflowId(), AgentType.COMPLIANCE_CHECK);
-        logDuration("合规校验", complianceStarted);
+        logPhase("合规校验", complianceStarted, created.workflowId(),
+                agentState(created.workflowId(), AgentType.COMPLIANCE_CHECK).getExecutionId());
 
         WorkflowState finalState = awaitStatus(created.workflowId(), WorkflowStatus.WAITING_REVIEW);
         logDuration("工作流进入待人工审核", complianceStarted);
         assertThat(finalState.getWorkflowStatus())
                 .withFailMessage(() -> diagnostic(created.workflowId()))
                 .isEqualTo(WorkflowStatus.WAITING_REVIEW);
+
+        ReviewResponse reviewResponse = workflowService.review(
+                manager,
+                created.workflowId(),
+                "full-live-review-" + UUID.randomUUID(),
+                new ReviewRequest(
+                        cfs.getArtifactId(),
+                        compliance.getArtifactId(),
+                        ReviewRequest.Decision.APPROVE,
+                        "live test auto approve"));
+        assertThat(reviewResponse.reviewStatus().name()).isEqualTo("APPROVED");
+        assertThat(reviewResponse.workflowStatus()).isEqualTo(WorkflowStatus.GENERATING_OUTPUT);
+        logDuration("CFS报告默认审核通过", complianceStarted);
 
         assertThat(cfs.getResult()).contains("inputArtifactRefs", "cfsStructure", "comprehensiveRiskAssessment");
         assertThat(compliance.getComplianceResult()).isEqualTo("PASS");
@@ -225,7 +263,7 @@ class AgentWorkflowFullLiveTest {
                 .withFailMessage(() -> diagnostic(workflowId))
                 .isNotNull();
         if (state.getAgentStatus() == AgentStatus.SUCCESS && logged.add(type)) {
-            logDuration(phase, startedNanos);
+            logPhase(phase, startedNanos, workflowId, state.getExecutionId());
         }
         assertThat(state.getAgentStatus())
                 .withFailMessage(() -> diagnostic(workflowId))
@@ -240,7 +278,16 @@ class AgentWorkflowFullLiveTest {
     }
 
     private void logDuration(String phase, long startedNanos) {
-        log.info("阶段完成：{}，耗时={}毫秒", phase, (System.nanoTime() - startedNanos) / 1_000_000);
+        long totalMs = (System.nanoTime() - startedNanos) / 1_000_000;
+        log.info("阶段完成：{}，耗时={}毫秒", phase, totalMs);
+    }
+
+    private void logPhase(String phase, long startedNanos, String workflowId, String executionId) {
+        long totalMs = (System.nanoTime() - startedNanos) / 1_000_000;
+        long modelMs = timingEngine.modelMs(workflowId, executionId).orElse(0L);
+        long deterministicMs = Math.max(0L, totalMs - modelMs);
+        log.info("阶段完成：{}，总耗时={}毫秒，模型执行={}毫秒，确定性程序执行={}毫秒",
+                phase, totalMs, modelMs, deterministicMs);
     }
     private WorkflowState awaitStatus(String workflowId, WorkflowStatus status) {
         Awaitility.await()
@@ -334,4 +381,16 @@ class AgentWorkflowFullLiveTest {
         return new CurrentUserPrincipal(
                 CUSTOMER_MANAGER_ID, "full-workflow-live-test", RoleName.CUSTOMER_MANAGER);
     }
+
+    @TestConfiguration(proxyBeanMethods = false)
+    static class TimingConfiguration {
+
+        @Bean
+        @Primary
+        TimingAgentScopeExecutionEngine timingAgentScopeExecutionEngine(
+                com.privatebank.agent.infrastructure.agentscope.AgentScopeExecutionEngine delegate) {
+            return new TimingAgentScopeExecutionEngine(delegate);
+        }
+    }
+
 }

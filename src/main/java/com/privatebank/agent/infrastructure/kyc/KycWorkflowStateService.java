@@ -151,15 +151,20 @@ public class KycWorkflowStateService {
     private String artifactResult(KycMaskedInput input, KycGenerationResult result) {
         try {
             JsonNode analysis = objectMapper.readTree(result.analysisJson());
-            return objectMapper.writeValueAsString(Map.of(
-                    "contractVersion", "kyc-result.v2",
-                    "model", result.modelName(),
-                    "modelAttempts", result.attempts(),
-                    "maskingApplied", true,
-                    "maskedInputSha256", input.sha256(),
-                    "evidenceReferences", input.evidenceReferences(),
-                    "aliasMappings", input.aliasMappings(),
-                    "analysis", analysis));
+            Map<String, Object> saved = new java.util.LinkedHashMap<>();
+            saved.put("contractVersion", "kyc-result.v2");
+            saved.put("model", result.modelName());
+            saved.put("modelAttempts", result.attempts());
+            saved.put("maskingApplied", true);
+            saved.put("maskedInputSha256", input.sha256());
+            saved.put("evidenceReferences", input.evidenceReferences());
+            saved.put("aliasMappings", input.aliasMappings());
+            saved.put("analysis", analysis);
+            Object qaHistory = input.payload().get("managerQa");
+            if (qaHistory != null) {
+                saved.put("qaHistory", qaHistory);
+            }
+            return objectMapper.writeValueAsString(saved);
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("KYC 分析结果无法保存", exception);
         }
