@@ -56,6 +56,8 @@ public class KycOutputValidator {
         if (!questions.isArray() || questions.size() > 10) {
             throw new KycOutputValidationException("followUpQuestions 必须是最多 10 项的数组");
         }
+        Set<String> questionIds = new LinkedHashSet<>();
+        Set<String> questionTexts = new LinkedHashSet<>();
         for (int i = 0; i < questions.size(); i++) {
             JsonNode question = questions.get(i);
             String path = "followUpQuestions[" + i + "]";
@@ -63,6 +65,12 @@ public class KycOutputValidator {
             requireExactFields(question, FOLLOW_UP_QUESTION_FIELDS, path + " 字段不符合 KYC 合约");
             requireText(question.path("id"), 64, path + ".id 无效");
             requireText(question.path("question"), 600, path + ".question 无效");
+            if (!questionIds.add(question.path("id").asText())) {
+                throw new KycOutputValidationException(path + ".id 不能重复");
+            }
+            if (!questionTexts.add(question.path("question").asText().trim())) {
+                throw new KycOutputValidationException(path + ".question 不能重复");
+            }
         }
     }
 

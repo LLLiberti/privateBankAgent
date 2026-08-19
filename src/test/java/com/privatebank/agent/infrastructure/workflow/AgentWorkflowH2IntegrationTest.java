@@ -162,6 +162,41 @@ class AgentWorkflowH2IntegrationTest {
                 .containsEntry("cfsArtifactId", cfsArtifact.getArtifactId());
     }
 
+    @Test
+    void answeringFollowUpQuestionKeepsWorkflowWaitingForManagerDecision() throws Exception {
+        CurrentUserPrincipal manager = new CurrentUserPrincipal("USER-2", "manager", RoleName.CUSTOMER_MANAGER);
+        when(customerDataMapper.findSummary(CUSTOMER_ID)).thenReturn(
+                new CustomerSummaryResponse(CUSTOMER_ID, "Customer One", "P-1001", "PERSON", "VERIFIED", "LOW"));
+        when(importBatchMapper.isCompletedAndAvailableForCustomer(IMPORT_BATCH_ID, CUSTOMER_ID)).thenReturn(true);
+
+        WorkflowCreatedResponse created = workflowService.create(manager, "QA-IDEMPOTENCY-1",
+                new CreateWorkflowRequest(CUSTOMER_ID, IMPORT_BATCH_ID, LocalDate.of(2026, 8, 1),
+                        "PRIVATE_BANK_REVIEW", null));
+        configureKyc();
+        kycExecutionService.execute(created.workflowId());
+        AgentArtifact firstKyc = latest(created.workflowId(), AgentType.CUSTOMER_INSIGHT);
+
+        workflowService.provideInput(manager, created.workflowId(), "QA-IDEMPOTENCY-2",
+                new WorkflowInputRequest(WorkflowInputRequest.Action.SUPPLEMENT, firstKyc.getArtifactId(),
+                        null, List.of(),
+                        List.of(new WorkflowInputRequest.Answer("Q1", "customer declines to confirm"))));
+        assertThat(workflowMapper.selectById(created.workflowId()).getWorkflowStatus())
+                .isEqualTo(WorkflowStatus.RUNNING);
+
+        KycQaItem qa = new KycQaItem("Q1", "P-1001 liquidity arrangement?", "customer declines to confirm");
+        kycExecutionService.execute(created.workflowId(),
+                new KycRuntimeSupplement(null, List.of(), List.of(qa)));
+
+        assertThat(workflowMapper.selectById(created.workflowId()).getWorkflowStatus())
+                .isEqualTo(WorkflowStatus.WAITING_INPUT);
+        assertThat(state(created.workflowId(), AgentType.MARKET_INSIGHT).getAgentStatus())
+                .isEqualTo(AgentStatus.PENDING);
+        assertThat(state(created.workflowId(), AgentType.PRODUCT_EXPERT).getAgentStatus())
+                .isEqualTo(AgentStatus.PENDING);
+        verify(maskingService).mask(any(KycCustomerData.class),
+                eq(new KycRuntimeSupplement(null, List.of(), List.of(qa))));
+    }
+
     private void configureKyc() {
         KycCustomerData data = org.mockito.Mockito.mock(KycCustomerData.class);
         KycMaskedInput masked = new KycMaskedInput(
@@ -195,6 +230,7 @@ class AgentWorkflowH2IntegrationTest {
                 + "\"findings\":[{\"dimension\":\"PERSON\",\"riskLevel\":\"LOW\","
                 + "\"finding\":\"固定证据支持\",\"evidenceRefs\":[\"SRC-1\"]}],"
                 + "\"riskAlerts\":[],\"recommendedActions\":[],\"dataGaps\":[],"
+                + "\"followUpQuestions\":[{\"id\":\"Q1\",\"question\":\"P-1001 liquidity arrangement?\"}],"
                 + "\"graphAssessment\":{\"contribution\":\"NOT_AVAILABLE\","
                 + "\"summary\":\"无图谱\",\"evidenceRefs\":[]}}";
     }

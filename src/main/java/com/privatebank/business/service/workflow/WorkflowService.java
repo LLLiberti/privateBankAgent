@@ -560,12 +560,17 @@ public class WorkflowService {
             return merged;
         }
         Map<String, CustomerInsightAnalysisResponse.FollowUpQuestion> questions = new java.util.LinkedHashMap<>();
+        Set<String> submittedQuestionIds = new java.util.LinkedHashSet<>();
         for (CustomerInsightAnalysisResponse.FollowUpQuestion question : extractFollowUpQuestions(current)) {
             questions.put(question.id(), question);
         }
         for (WorkflowInputRequest.Answer answer : answers) {
             if (answer == null || !StringUtils.hasText(answer.answer())) {
                 continue;
+            }
+            if (!submittedQuestionIds.add(answer.questionId())) {
+                throw new BusinessException(HttpStatus.BAD_REQUEST, ErrorCode.INVALID_ARGUMENT,
+                        "同一个问题不能重复提交回答: " + answer.questionId());
             }
             CustomerInsightAnalysisResponse.FollowUpQuestion question = questions.get(answer.questionId());
             if (question == null) {
