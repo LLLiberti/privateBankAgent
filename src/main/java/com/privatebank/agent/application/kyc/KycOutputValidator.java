@@ -18,9 +18,11 @@ public class KycOutputValidator {
 
     private static final Set<String> ROOT_FIELDS = Set.of(
             "riskLevel", "summary", "findings", "riskAlerts", "recommendedActions", "dataGaps",
-            "graphAssessment");
+            "graphAssessment", "followUpQuestions");
     private static final Set<String> FINDING_FIELDS = Set.of(
             "dimension", "riskLevel", "finding", "evidenceRefs");
+    private static final Set<String> FOLLOW_UP_QUESTION_FIELDS = Set.of(
+            "id", "question");
     private static final Set<String> GRAPH_ASSESSMENT_FIELDS = Set.of(
             "contribution", "summary", "evidenceRefs");
     private static final Set<String> RISK_LEVELS = Set.of("LOW", "MEDIUM", "HIGH", "UNKNOWN");
@@ -40,12 +42,35 @@ public class KycOutputValidator {
         validateTextArray(root.path("riskAlerts"), 20, 600, "riskAlerts 无效");
         validateTextArray(root.path("recommendedActions"), 20, 600, "recommendedActions 无效");
         validateTextArray(root.path("dataGaps"), 20, 600, "dataGaps 无效");
+        validateFollowUpQuestions(root.path("followUpQuestions"));
         validateGraphAssessment(root.path("graphAssessment"), root.path("findings"), input);
         rejectSensitiveText(root, input.prohibitedTerms());
         try {
             return objectMapper.writeValueAsString(root);
         } catch (JsonProcessingException exception) {
             throw new KycOutputValidationException("KYC 结果无法序列化");
+        }
+    }
+
+    private void validateFollowUpQuestions(JsonNode questions) {
+        if (!questions.isArray() || questions.size() > 10) {
+            throw new KycOutputValidationException("followUpQuestions 必须是最多 10 项的数组");
+        }
+        Set<String> questionIds = new LinkedHashSet<>();
+        Set<String> questionTexts = new LinkedHashSet<>();
+        for (int i = 0; i < questions.size(); i++) {
+            JsonNode question = questions.get(i);
+            String path = "followUpQuestions[" + i + "]";
+            requireObject(question, path + " 必须是对象");
+            requireExactFields(question, FOLLOW_UP_QUESTION_FIELDS, path + " 字段不符合 KYC 合约");
+            requireText(question.path("id"), 64, path + ".id 无效");
+            requireText(question.path("question"), 600, path + ".question 无效");
+            if (!questionIds.add(question.path("id").asText())) {
+                throw new KycOutputValidationException(path + ".id 不能重复");
+            }
+            if (!questionTexts.add(question.path("question").asText().trim())) {
+                throw new KycOutputValidationException(path + ".question 不能重复");
+            }
         }
     }
 

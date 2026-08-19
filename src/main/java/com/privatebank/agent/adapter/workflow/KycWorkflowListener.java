@@ -27,6 +27,9 @@ public class KycWorkflowListener {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void onKycRegenerationRequested(KycRegenerationRequestedEvent event) {
         kycWorkflowExecutionService.execute(event.workflowId(),
-                new KycRuntimeSupplement(event.managerDescription(), event.managerConfirmedItems()));
+                new KycRuntimeSupplement(
+                        event.managerDescription(),
+                        event.managerConfirmedItems(),
+                        event.qaItems()));
     }
 }

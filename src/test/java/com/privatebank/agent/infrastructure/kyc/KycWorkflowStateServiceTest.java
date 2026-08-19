@@ -93,6 +93,36 @@ class KycWorkflowStateServiceTest {
         assertThat(event.artifactId()).isEqualTo(artifact.getArtifactId());
     }
 
+    @Test
+    void persistsSanitizedQaHistoryInArtifactResult() throws Exception {
+        WorkflowStateMapper workflowMapper = mock(WorkflowStateMapper.class);
+        AgentStateMapper agentStateMapper = mock(AgentStateMapper.class);
+        AgentArtifactMapper artifactMapper = mock(AgentArtifactMapper.class);
+        ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
+        KycWorkflowStateService service = new KycWorkflowStateService(
+                workflowMapper, agentStateMapper, artifactMapper, eventPublisher, objectMapper);
+        WorkflowState workflow = workflow();
+        AgentState agentState = readyAgentState();
+        when(workflowMapper.selectById("WF-1")).thenReturn(workflow);
+        when(agentStateMapper.selectOne(org.mockito.ArgumentMatchers.<Wrapper<AgentState>>any())).thenReturn(agentState);
+        when(artifactMapper.selectOne(org.mockito.ArgumentMatchers.<Wrapper<AgentArtifact>>any())).thenReturn(null);
+        when(artifactMapper.insert(any(AgentArtifact.class))).thenReturn(1);
+        when(agentStateMapper.updateById(any(AgentState.class))).thenReturn(1);
+        when(workflowMapper.updateById(any(WorkflowState.class))).thenReturn(1);
+
+        KycExecutionClaim claim = service.claim("WF-1").orElseThrow();
+        boolean completed = service.complete(claim, maskedInputWithQa(), generationResult());
+
+        assertThat(completed).isTrue();
+        ArgumentCaptor<AgentArtifact> artifactCaptor = ArgumentCaptor.forClass(AgentArtifact.class);
+        verify(artifactMapper).insert(artifactCaptor.capture());
+        JsonNode savedResult = objectMapper.readTree(artifactCaptor.getValue().getResult());
+        assertThat(savedResult.path("qaHistory").isArray()).isTrue();
+        assertThat(savedResult.path("qaHistory").get(0).path("questionId").asText()).isEqualTo("Q1");
+        assertThat(savedResult.path("qaHistory").get(0).path("answer").asText()).isEqualTo("P-1有流动性安排");
+        assertThat(savedResult.toString()).doesNotContain("managerInstruction", "managerEvidence");
+    }
+
     private WorkflowState workflow() {
         WorkflowState workflow = new WorkflowState();
         workflow.setWorkflowId("WF-1");
@@ -119,6 +149,22 @@ class KycWorkflowStateServiceTest {
                 Map.of("person", Map.of(), "managerInstruction", "关注P-1流动性",
                         "managerEvidence", List.of(Map.of(
                                 "evidenceRef", "MGR-1", "statement", "P-1存在流动性安排"))),
+                Map.of("SRC-1", 1001L),
+                Set.of("MGR-1"),
+                Set.of("客户经理补充的原始内容"),
+                Map.of("P-1", "张三", "E-1", "某某科技有限公司"),
+                "a".repeat(64));
+    }
+
+
+    private KycMaskedInput maskedInputWithQa() {
+        return new KycMaskedInput(
+                Map.of("person", Map.of(),
+                        "managerQa", List.of(Map.of(
+                                "questionId", "Q1",
+                                "question", "P-1近期是否有流动性安排？",
+                                "answer", "P-1有流动性安排",
+                                "evidenceRef", "MGR-1"))),
                 Map.of("SRC-1", 1001L),
                 Set.of("MGR-1"),
                 Set.of("客户经理补充的原始内容"),
