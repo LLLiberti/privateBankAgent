@@ -85,6 +85,21 @@ public class ProductKnowledgeSearchService {
                 .toList();
         List<ProductMetadata> matchedProducts = selectMetadataCandidates(eligibleProducts, effectiveQueries);
         if (matchedProducts.isEmpty()) {
+            List<ProductMetadata> preferenceFallbackProducts = selectPreferenceFallbackCandidates(
+                    eligibleProducts, effectiveQueries);
+            if (!preferenceFallbackProducts.isEmpty()) {
+                matchedProducts = preferenceFallbackProducts;
+                List<String> fallbackProductIds = preferenceFallbackProducts.stream()
+                        .map(ProductMetadata::getProductId)
+                        .filter(StringUtils::hasText)
+                        .distinct()
+                        .toList();
+                issues.add(issue("MYSQL_METADATA", "METADATA_PREFERENCE_FALLBACK",
+                        "候选产品满足硬性准入和部分偏好，但存在期限、保本或收益类型等偏好冲突；必须基于产品证据披露限制，不得视为完全匹配",
+                        fallbackProductIds));
+            }
+        }
+        if (matchedProducts.isEmpty()) {
             issues.add(issue(
                     "MYSQL_METADATA",
                     "NO_METADATA_MATCH",
@@ -172,6 +187,22 @@ public class ProductKnowledgeSearchService {
 
         return matches.stream()
                 .filter(match -> !match.contradicted() && match.score() > 0)
+                .sorted(Comparator.comparingInt(MetadataProductMatch::score).reversed()
+                        .thenComparing(match -> nullToEmpty(match.product().getProductId())))
+                .map(MetadataProductMatch::product)
+                .toList();
+    }
+
+    private List<ProductMetadata> selectPreferenceFallbackCandidates(
+            List<ProductMetadata> eligibleProducts,
+            List<String> queries) {
+        List<String> terms = metadataTerms(queries);
+        if (terms.isEmpty()) {
+            return List.of();
+        }
+        return eligibleProducts.stream()
+                .map(product -> metadataMatch(product, terms))
+                .filter(match -> match.score() > 0)
                 .sorted(Comparator.comparingInt(MetadataProductMatch::score).reversed()
                         .thenComparing(match -> nullToEmpty(match.product().getProductId())))
                 .map(MetadataProductMatch::product)

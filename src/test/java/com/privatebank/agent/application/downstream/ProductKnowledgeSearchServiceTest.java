@@ -127,7 +127,7 @@ class ProductKnowledgeSearchServiceTest {
     }
 
     @Test
-    void rejectsContradictoryPrincipalSafetyMetadataBeforeEvidenceRecall() {
+    void rejectsProductWhenOnlyRecognizedPreferenceContradicts() {
         ProductMetadata product = product("P-1", "稳健型");
         product.setProductCategory("固定收益类");
         product.setIncomeType("非保本浮动收益型");
@@ -137,12 +137,38 @@ class ProductKnowledgeSearchServiceTest {
         when(metadataMapper.selectList(any())).thenReturn(List.of(product));
 
         ProductKnowledgeSearchResult result = service.search(
-                List.of("稳健型 本金安全 确定性收益"), null, null, null);
+                List.of("本金安全 确定性收益"), null, null, null);
 
         assertThat(result.candidateProductIds()).isEmpty();
         assertThat(result.evidence()).isEmpty();
         assertThat(result.retrievalIssues()).extracting("code").containsExactly("NO_METADATA_MATCH");
         verify(documentResolver, never()).resolve(any());
+    }
+
+    @Test
+    void fallsBackToPartialMetadataMatchesAndMarksPreferenceConflict() {
+        ProductMetadata product = product("P-1", "稳健型、平衡型");
+        product.setProductCategory("固定收益类");
+        product.setIncomeType("非保本浮动收益型");
+        product.setRiskLevel("PR2");
+        ProductMetadataMapper metadataMapper = mock(ProductMetadataMapper.class);
+        ProductDocumentIdResolver documentResolver = mock(ProductDocumentIdResolver.class);
+        ProductKnowledgeSearchService service = service(metadataMapper, documentResolver, disabledProperties());
+        when(metadataMapper.selectList(any())).thenReturn(List.of(product));
+        when(documentResolver.resolve(List.of("P-1"))).thenReturn(
+                new ProductDocumentIdResolver.Resolution(List.of(), Map.of(), List.of("P-1")));
+
+        ProductKnowledgeSearchResult result = service.search(
+                List.of(
+                        "稳健型 低风险 固定收益",
+                        "保本增值 本金安全",
+                        "投资期限 1-2年 确定性收益"),
+                null, "PR2", "ACTIVE");
+
+        verify(documentResolver).resolve(List.of("P-1"));
+        assertThat(result.retrievalIssues()).extracting("code")
+                .contains("METADATA_PREFERENCE_FALLBACK", "MISSING_DOCUMENT_MAPPING", "NO_PRODUCT_DOCUMENT")
+                .doesNotContain("NO_METADATA_MATCH");
     }
 
     @Test
