@@ -1,5 +1,7 @@
 package com.privatebank.business.mapper.product;
 
+import org.apache.ibatis.annotations.Arg;
+import org.apache.ibatis.annotations.ConstructorArgs;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 
@@ -7,9 +9,13 @@ import java.util.List;
 
 public interface ProductDocumentMapper {
 
+    @ConstructorArgs({
+            @Arg(column = "product_id", javaType = String.class),
+            @Arg(column = "document_id", javaType = String.class)
+    })
     @Select("""
             <script>
-            SELECT document_id
+            SELECT product_id, document_id
               FROM product_document
              WHERE product_id IN
              <foreach collection="productIds" item="productId" open="(" separator="," close=")">
@@ -17,13 +23,5 @@ public interface ProductDocumentMapper {
              </foreach>
             </script>
             """)
-    List<String> findDocumentIdsByProductIds(@Param("productIds") List<String> productIds);
-
-    @Select("""
-            SELECT product_id
-              FROM product_document
-             WHERE document_id = #{documentId}
-             LIMIT 1
-            """)
-    String findProductIdByDocumentId(@Param("documentId") String documentId);
+    List<ProductDocumentLink> findLinksByProductIds(@Param("productIds") List<String> productIds);
 }

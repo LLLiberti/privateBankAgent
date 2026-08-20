@@ -29,7 +29,7 @@ public record ProductKnowledgeProperties(
             String collectionName,
             Boolean initializeSchema) {
         public Qdrant {
-            port = port == null ? 6334 : port;
+            port = port == null ? 6333 : port;
             collectionName = collectionName == null || collectionName.isBlank()
                     ? "private-bank-product-chunks-v1"
                     : collectionName;
