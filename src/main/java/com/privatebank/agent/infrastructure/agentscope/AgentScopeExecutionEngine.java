@@ -51,11 +51,7 @@ public class AgentScopeExecutionEngine implements StructuredAgentRuntime {
                             definition.outputType(),
                             contextFactory.create(request))
                     .block(properties.modelCallTimeout());
-            if (result == null || result.getGenerateReason() == null
-                    || !SUCCESS_REASONS.contains(result.getGenerateReason())
-                    || !result.hasStructuredData()) {
-                throw new AgentRuntimeException("AgentScope 未返回可用的结构化结果");
-            }
+            validateStructuredResult(result);
             return new AgentExecutionResult<>(
                     result.getStructuredData(definition.outputType()),
                     1,
@@ -66,6 +62,21 @@ public class AgentScopeExecutionEngine implements StructuredAgentRuntime {
             throw new AgentRuntimeException("AgentScope 执行失败", exception);
         } finally {
             agent.close();
+        }
+    }
+
+    static void validateStructuredResult(Msg result) {
+        if (result == null) {
+            throw new AgentRuntimeException("AgentScope 未返回结果");
+        }
+        if (!result.hasStructuredData()) {
+            throw new AgentRuntimeException(
+                    "AgentScope 未返回结构化结果，generateReason=" + result.getGenerateReason());
+        }
+        GenerateReason generateReason = result.getGenerateReason();
+        if (generateReason != null && !SUCCESS_REASONS.contains(generateReason)) {
+            throw new AgentRuntimeException(
+                    "AgentScope 结构化结果状态不可用，generateReason=" + generateReason);
         }
     }
 }

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.privatebank.agent.domain.downstream.ProductKnowledgeEvidence;
 import com.privatebank.agent.domain.downstream.ProductKnowledgeSearchResult;
+import com.privatebank.agent.domain.downstream.ProductRetrievalIssue;
 import com.privatebank.business.config.ProductKnowledgeProperties;
 import com.privatebank.business.entity.product.ProductMetadata;
 import com.privatebank.business.mapper.product.ProductMetadataMapper;
@@ -19,20 +20,26 @@ import org.springframework.web.client.RestClient;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Product knowledge search used by KYP Agent.
  *
- * <p>The service always applies MySQL deterministic filtering first.  It then
- * performs ES BM25 and Qdrant vector recall when the corresponding infrastructure
- * is configured.  Results are merged by chunk_id and ranked with RRF.
+ * <p>MySQL first produces a whitelist from hard business constraints only.
+ * Elasticsearch and Qdrant then recall evidence inside that whitelist. Metadata
+ * keyword matches are a soft RRF signal and never remove semantically relevant
+ * products.
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class ProductKnowledgeSearchService {
+
+    private static final String ACTIVE = "ACTIVE";
 
     private final ProductMetadataMapper productMetadataMapper;
     private final ProductDocumentIdResolver documentIdResolver;
@@ -49,49 +56,93 @@ public class ProductKnowledgeSearchService {
     private String esPassword;
 
     public ProductKnowledgeSearchResult search(
-            String query,
+            List<String> queries,
             List<String> requestedProductIds,
             String riskLevel,
             String saleStatus) {
-        List<String> candidates = filterCandidates(query, requestedProductIds, riskLevel, saleStatus);
-        if (candidates.isEmpty()) {
-            return new ProductKnowledgeSearchResult(candidates, List.of());
+        List<ProductRetrievalIssue> issues = new ArrayList<>();
+        List<String> effectiveQueries = normalizeValues(queries);
+        if (effectiveQueries.isEmpty()) {
+            issues.add(issue("REQUEST", "EMPTY_QUERY", "未提供可用于产品知识检索的关键词", List.of()));
+            return new ProductKnowledgeSearchResult(List.of(), List.of(), issues);
         }
 
-        List<String> documentIds = documentIdResolver.toDocumentIds(candidates);
-        List<ProductKnowledgeEvidence> esEvidence = esSearch(query, documentIds, candidates);
-        List<ProductKnowledgeEvidence> vectorEvidence = qdrantSearch(query, documentIds, candidates);
-        List<ProductKnowledgeEvidence> merged = mergeByRrf(esEvidence, vectorEvidence, properties.topK());
-        return new ProductKnowledgeSearchResult(candidates, merged);
-    }
-
-    private List<String> filterCandidates(
-            String query,
-            List<String> requestedProductIds,
-            String riskLevel,
-            String saleStatus) {
-        if (requestedProductIds != null && !requestedProductIds.isEmpty()) {
-            return requestedProductIds.stream().distinct().toList();
+        List<ProductMetadata> eligibleProducts = loadHardEligibleProducts(
+                normalizeValues(requestedProductIds), riskLevel, saleStatus);
+        if (eligibleProducts.isEmpty()) {
+            issues.add(issue("MYSQL", "NO_ELIGIBLE_PRODUCT", "没有产品满足销售状态、产品风险等级或指定产品范围", List.of()));
+            return new ProductKnowledgeSearchResult(List.of(), List.of(), issues);
         }
-        var wrapper = Wrappers.<ProductMetadata>lambdaQuery()
-                .eq(StringUtils.hasText(riskLevel), ProductMetadata::getRiskLevel, riskLevel)
-                .eq(StringUtils.hasText(saleStatus), ProductMetadata::getProductStatus, saleStatus)
-                .and(StringUtils.hasText(query), q -> q
-                        .like(ProductMetadata::getProductName, query)
-                        .or().like(ProductMetadata::getProductCode, query)
-                        .or().like(ProductMetadata::getSalesCode, query))
-                .orderByAsc(ProductMetadata::getProductId);
-        return productMetadataMapper.selectList(wrapper).stream()
+
+        List<String> eligibleProductIds = eligibleProducts.stream()
                 .map(ProductMetadata::getProductId)
+                .filter(StringUtils::hasText)
                 .distinct()
                 .toList();
+        ProductDocumentIdResolver.Resolution resolution = documentIdResolver.resolve(eligibleProductIds);
+        if (!resolution.unmappedProductIds().isEmpty()) {
+            issues.add(issue(
+                    "DOCUMENT_MAPPING",
+                    "MISSING_DOCUMENT_MAPPING",
+                    "部分合规产品没有关联产品知识文档",
+                    resolution.unmappedProductIds()));
+        }
+        if (resolution.documentIds().isEmpty()) {
+            issues.add(issue(
+                    "DOCUMENT_MAPPING",
+                    "NO_PRODUCT_DOCUMENT",
+                    "合规产品没有可检索的产品知识文档",
+                    eligibleProductIds));
+            return new ProductKnowledgeSearchResult(List.of(), List.of(), issues);
+        }
+
+        String semanticQuery = String.join(" ", effectiveQueries);
+        List<ProductKnowledgeEvidence> esEvidence = esSearch(
+                semanticQuery, resolution.documentIds(), resolution.productIdByDocumentId(), eligibleProductIds, issues);
+        List<ProductKnowledgeEvidence> vectorEvidence = qdrantSearch(
+                semanticQuery, resolution.documentIds(), resolution.productIdByDocumentId(), eligibleProductIds, issues);
+        List<ProductKnowledgeEvidence> merged = mergeAndRerank(
+                esEvidence, vectorEvidence, eligibleProducts, effectiveQueries, properties.topK());
+
+        if (merged.isEmpty()) {
+            issues.add(issue(
+                    "RETRIEVAL",
+                    "NO_PRODUCT_EVIDENCE",
+                    "合规产品范围内未召回任何产品知识证据",
+                    eligibleProductIds));
+            return new ProductKnowledgeSearchResult(List.of(), List.of(), issues);
+        }
+
+        List<String> candidateProductIds = merged.stream()
+                .map(ProductKnowledgeEvidence::productId)
+                .filter(StringUtils::hasText)
+                .distinct()
+                .toList();
+        return new ProductKnowledgeSearchResult(candidateProductIds, merged, issues);
+    }
+
+    private List<ProductMetadata> loadHardEligibleProducts(
+            List<String> requestedProductIds,
+            String riskLevel,
+            String saleStatus) {
+        String effectiveSaleStatus = StringUtils.hasText(saleStatus) ? saleStatus.trim() : ACTIVE;
+        var wrapper = Wrappers.<ProductMetadata>lambdaQuery()
+                .eq(ProductMetadata::getProductStatus, effectiveSaleStatus)
+                .eq(StringUtils.hasText(riskLevel), ProductMetadata::getRiskLevel, trimToNull(riskLevel))
+                .in(!requestedProductIds.isEmpty(), ProductMetadata::getProductId, requestedProductIds)
+                .orderByAsc(ProductMetadata::getProductId);
+        return productMetadataMapper.selectList(wrapper);
     }
 
     private List<ProductKnowledgeEvidence> esSearch(
             String query,
             List<String> documentIds,
-            List<String> candidateProductIds) {
-        if (!StringUtils.hasText(esUris) || !StringUtils.hasText(query)) {
+            Map<String, String> productIdByDocumentId,
+            List<String> affectedProductIds,
+            List<ProductRetrievalIssue> issues) {
+        if (!StringUtils.hasText(esUris)) {
+            issues.add(issue("ELASTICSEARCH", "ELASTICSEARCH_NOT_CONFIGURED",
+                    "Elasticsearch 产品知识检索未配置", affectedProductIds));
             return List.of();
         }
         try {
@@ -105,7 +156,7 @@ public class ProductKnowledgeSearchService {
                     })
                     .build();
             Map<String, Object> body = Map.of(
-                    "size", Math.max(20, properties.topK() * 2),
+                    "size", recallSize(),
                     "query", Map.of(
                             "bool", Map.of(
                                     "must", List.of(Map.of("match", Map.of("content", query))),
@@ -115,9 +166,18 @@ public class ProductKnowledgeSearchService {
                     .body(body)
                     .retrieve()
                     .body(String.class);
-            return parseEsResponse(response, candidateProductIds);
+            int issueCount = issues.size();
+            List<ProductKnowledgeEvidence> evidence = parseEsResponse(
+                    response, productIdByDocumentId, affectedProductIds, issues);
+            if (evidence.isEmpty() && issues.size() == issueCount) {
+                issues.add(issue("ELASTICSEARCH", "ELASTICSEARCH_NO_HITS",
+                        "Elasticsearch 在合规产品范围内没有召回证据", affectedProductIds));
+            }
+            return evidence;
         } catch (Exception exception) {
-            log.warn("Elasticsearch product search failed, fallback to empty: {}", exception.getMessage());
+            log.warn("Elasticsearch product knowledge search failed", exception);
+            issues.add(issue("ELASTICSEARCH", "ELASTICSEARCH_REQUEST_FAILED",
+                    "Elasticsearch 产品知识检索请求失败", affectedProductIds));
             return List.of();
         }
     }
@@ -125,17 +185,22 @@ public class ProductKnowledgeSearchService {
     private List<ProductKnowledgeEvidence> qdrantSearch(
             String query,
             List<String> documentIds,
-            List<String> candidateProductIds) {
+            Map<String, String> productIdByDocumentId,
+            List<String> affectedProductIds,
+            List<ProductRetrievalIssue> issues) {
         ProductKnowledgeProperties.Qdrant qdrant = properties.qdrant();
-        ProductKnowledgeProperties.Embedding embedding = properties.embedding();
-        if (!StringUtils.hasText(qdrant.host()) || !StringUtils.hasText(embedding.apiKey()) || !StringUtils.hasText(query)) {
+        if (!StringUtils.hasText(qdrant.host())) {
+            issues.add(issue("QDRANT", "QDRANT_NOT_CONFIGURED",
+                    "Qdrant 产品知识检索未配置", affectedProductIds));
             return List.of();
         }
+
+        List<Double> vector = embed(query, affectedProductIds, issues);
+        if (vector.isEmpty()) {
+            return List.of();
+        }
+
         try {
-            List<Double> vector = embed(query);
-            if (vector == null || vector.isEmpty()) {
-                return List.of();
-            }
             RestClient client = RestClient.builder()
                     .baseUrl("http://" + qdrant.host() + ":" + qdrant.port())
                     .defaultHeaders(headers -> {
@@ -147,128 +212,180 @@ public class ProductKnowledgeSearchService {
                     .build();
             Map<String, Object> body = Map.of(
                     "vector", vector,
-                    "limit", Math.max(20, properties.topK() * 2),
+                    "limit", recallSize(),
                     "with_payload", true,
                     "filter", Map.of("must", List.of(
-                            Map.of("key", "document_id", "match", Map.of("value", documentIds)))));
+                            Map.of("key", "document_id", "match", Map.of("any", documentIds)))));
             String response = client.post()
                     .uri("/collections/" + qdrant.collectionName() + "/points/search")
                     .body(body)
                     .retrieve()
                     .body(String.class);
-            return parseQdrantResponse(response, candidateProductIds);
+            int issueCount = issues.size();
+            List<ProductKnowledgeEvidence> evidence = parseQdrantResponse(
+                    response, productIdByDocumentId, affectedProductIds, issues);
+            if (evidence.isEmpty() && issues.size() == issueCount) {
+                issues.add(issue("QDRANT", "QDRANT_NO_HITS",
+                        "Qdrant 在合规产品范围内没有召回证据", affectedProductIds));
+            }
+            return evidence;
         } catch (Exception exception) {
-            log.warn("Qdrant product search failed, fallback to empty: {}", exception.getMessage());
+            log.warn("Qdrant product knowledge search failed", exception);
+            issues.add(issue("QDRANT", "QDRANT_REQUEST_FAILED",
+                    "Qdrant 产品知识检索请求失败", affectedProductIds));
             return List.of();
         }
     }
 
-    private List<Double> embed(String text) {
+    private List<Double> embed(
+            String text,
+            List<String> affectedProductIds,
+            List<ProductRetrievalIssue> issues) {
         ProductKnowledgeProperties.Embedding embedding = properties.embedding();
-        RestClient client = RestClient.builder()
-                .baseUrl(embedding.baseUrl())
-                .defaultHeaders(headers -> {
-                    if (StringUtils.hasText(embedding.apiKey())) {
-                        headers.setBearerAuth(embedding.apiKey());
-                    }
-                    headers.setContentType(MediaType.APPLICATION_JSON);
-                })
-                .build();
-        String response = client.post()
-                .uri("/embeddings")
-                .body(Map.of(
-                        "model", embedding.model(),
-                        "input", List.of(text),
-                        "dimensions", embedding.dimensions(),
-                        "encoding_format", "float"))
-                .retrieve()
-                .body(String.class);
-        try {
-            JsonNode root = objectMapper.readTree(response);
-            JsonNode data = root.path("data");
-            if (data.isArray() && !data.isEmpty()) {
-                List<Double> vector = new ArrayList<>();
-                for (JsonNode value : data.get(0).path("embedding")) {
-                    vector.add(value.asDouble());
-                }
-                return vector;
-            }
-        } catch (Exception exception) {
-            log.warn("Embedding response parse failed: {}", exception.getMessage());
+        if (!StringUtils.hasText(embedding.baseUrl())
+                || !StringUtils.hasText(embedding.apiKey())
+                || !StringUtils.hasText(embedding.model())) {
+            issues.add(issue("EMBEDDING", "EMBEDDING_NOT_CONFIGURED",
+                    "查询向量模型未完整配置", affectedProductIds));
+            return List.of();
         }
-        return List.of();
+
+        try {
+            RestClient client = RestClient.builder()
+                    .baseUrl(normalizeBase(embedding.baseUrl()))
+                    .defaultHeaders(headers -> {
+                        headers.setBearerAuth(embedding.apiKey());
+                        headers.setContentType(MediaType.APPLICATION_JSON);
+                    })
+                    .build();
+            String response = client.post()
+                    .uri("/embeddings")
+                    .body(Map.of(
+                            "model", embedding.model(),
+                            "input", List.of(text),
+                            "dimensions", embedding.dimensions(),
+                            "encoding_format", "float"))
+                    .retrieve()
+                    .body(String.class);
+            JsonNode data = objectMapper.readTree(response).path("data");
+            if (!data.isArray() || data.isEmpty() || !data.get(0).path("embedding").isArray()) {
+                issues.add(issue("EMBEDDING", "EMBEDDING_INVALID_RESPONSE",
+                        "查询向量模型没有返回有效向量", affectedProductIds));
+                return List.of();
+            }
+            List<Double> vector = new ArrayList<>();
+            for (JsonNode value : data.get(0).path("embedding")) {
+                vector.add(value.asDouble());
+            }
+            if (vector.size() != properties.embedding().dimensions()) {
+                issues.add(issue("EMBEDDING", "EMBEDDING_DIMENSION_MISMATCH",
+                        "查询向量维度与产品知识库配置不一致", affectedProductIds));
+                return List.of();
+            }
+            return vector;
+        } catch (Exception exception) {
+            log.warn("Product query embedding failed", exception);
+            issues.add(issue("EMBEDDING", "EMBEDDING_REQUEST_FAILED",
+                    "查询向量生成失败", affectedProductIds));
+            return List.of();
+        }
     }
 
     private List<ProductKnowledgeEvidence> parseEsResponse(
             String response,
-            List<String> candidateProductIds) {
+            Map<String, String> productIdByDocumentId,
+            List<String> affectedProductIds,
+            List<ProductRetrievalIssue> issues) {
         try {
             JsonNode hits = objectMapper.readTree(response).path("hits").path("hits");
+            if (!hits.isArray()) {
+                throw new IllegalArgumentException("hits.hits is not an array");
+            }
             List<ProductKnowledgeEvidence> result = new ArrayList<>();
             int rank = 1;
             for (JsonNode hit : hits) {
                 JsonNode source = hit.path("_source");
-                String chunkId = source.path("chunk_id").asText();
-                String documentId = source.path("document_id").asText();
-                String content = source.path("content").asText("");
-                String productId = resolveProductId(documentId, candidateProductIds);
-                result.add(new ProductKnowledgeEvidence(
-                        chunkId, documentId, productId, content, documentId, 1.0 / rank));
-                rank++;
+                ProductKnowledgeEvidence evidence = toEvidence(source, productIdByDocumentId, rank);
+                if (evidence != null) {
+                    result.add(evidence);
+                    rank++;
+                }
             }
             return result;
         } catch (Exception exception) {
-            log.warn("ES response parse failed: {}", exception.getMessage());
+            log.warn("Elasticsearch product knowledge response parse failed", exception);
+            issues.add(issue("ELASTICSEARCH", "ELASTICSEARCH_INVALID_RESPONSE",
+                    "Elasticsearch 返回了无法解析的产品知识结果", affectedProductIds));
             return List.of();
         }
     }
 
     private List<ProductKnowledgeEvidence> parseQdrantResponse(
             String response,
-            List<String> candidateProductIds) {
+            Map<String, String> productIdByDocumentId,
+            List<String> affectedProductIds,
+            List<ProductRetrievalIssue> issues) {
         try {
             JsonNode result = objectMapper.readTree(response).path("result");
-            List<ProductKnowledgeEvidence> list = new ArrayList<>();
+            if (!result.isArray()) {
+                throw new IllegalArgumentException("result is not an array");
+            }
+            List<ProductKnowledgeEvidence> evidence = new ArrayList<>();
             int rank = 1;
             for (JsonNode point : result) {
-                JsonNode payload = point.path("payload");
-                String chunkId = payload.path("chunk_id").asText();
-                String documentId = payload.path("document_id").asText();
-                String content = payload.path("content").asText("");
-                String productId = resolveProductId(documentId, candidateProductIds);
-                list.add(new ProductKnowledgeEvidence(
-                        chunkId, documentId, productId, content, documentId, 1.0 / rank));
-                rank++;
+                ProductKnowledgeEvidence item = toEvidence(
+                        point.path("payload"), productIdByDocumentId, rank);
+                if (item != null) {
+                    evidence.add(item);
+                    rank++;
+                }
             }
-            return list;
+            return evidence;
         } catch (Exception exception) {
-            log.warn("Qdrant response parse failed: {}", exception.getMessage());
+            log.warn("Qdrant product knowledge response parse failed", exception);
+            issues.add(issue("QDRANT", "QDRANT_INVALID_RESPONSE",
+                    "Qdrant 返回了无法解析的产品知识结果", affectedProductIds));
             return List.of();
         }
     }
 
-    private String resolveProductId(String documentId, List<String> candidateProductIds) {
-        if (candidateProductIds != null && candidateProductIds.contains(documentId)) {
-            return documentId;
+    private ProductKnowledgeEvidence toEvidence(
+            JsonNode source,
+            Map<String, String> productIdByDocumentId,
+            int rank) {
+        String chunkId = source.path("chunk_id").asText();
+        String documentId = source.path("document_id").asText();
+        String productId = productIdByDocumentId.get(documentId);
+        if (!StringUtils.hasText(chunkId) || !StringUtils.hasText(documentId) || !StringUtils.hasText(productId)) {
+            return null;
         }
-        return documentIdResolver.toProductId(documentId);
+        return new ProductKnowledgeEvidence(
+                chunkId,
+                documentId,
+                productId,
+                source.path("content").asText(""),
+                source.path("source_file").asText(documentId),
+                1.0 / rank);
     }
 
-    private List<ProductKnowledgeEvidence> mergeByRrf(
+    private List<ProductKnowledgeEvidence> mergeAndRerank(
             List<ProductKnowledgeEvidence> esEvidence,
             List<ProductKnowledgeEvidence> vectorEvidence,
+            List<ProductMetadata> eligibleProducts,
+            List<String> queries,
             int topK) {
         Map<String, Double> scores = new LinkedHashMap<>();
         Map<String, ProductKnowledgeEvidence> byChunk = new LinkedHashMap<>();
 
         addRrf(scores, byChunk, esEvidence, properties.rrfK());
         addRrf(scores, byChunk, vectorEvidence, properties.rrfK());
+        addMetadataRrf(scores, byChunk, eligibleProducts, queries, properties.rrfK());
 
-        return scores.entrySet().stream()
+        List<ProductKnowledgeEvidence> sorted = scores.entrySet().stream()
                 .sorted(Map.Entry.<String, Double>comparingByValue(Comparator.reverseOrder()))
-                .limit(topK)
-                .map(entry -> byChunk.get(entry.getKey()))
+                .map(entry -> withScore(byChunk.get(entry.getKey()), entry.getValue()))
                 .toList();
+        return roundRobinByProduct(sorted, topK);
     }
 
     private void addRrf(
@@ -278,11 +395,134 @@ public class ProductKnowledgeSearchService {
             int k) {
         int rank = 1;
         for (ProductKnowledgeEvidence item : evidence) {
-            String key = item.chunkId();
-            scores.merge(key, 1.0 / (k + rank), Double::sum);
-            byChunk.putIfAbsent(key, item);
+            if (!StringUtils.hasText(item.chunkId())) {
+                continue;
+            }
+            scores.merge(item.chunkId(), 1.0 / (k + rank), Double::sum);
+            byChunk.putIfAbsent(item.chunkId(), item);
             rank++;
         }
+    }
+
+    private void addMetadataRrf(
+            Map<String, Double> scores,
+            Map<String, ProductKnowledgeEvidence> byChunk,
+            List<ProductMetadata> eligibleProducts,
+            List<String> queries,
+            int k) {
+        Map<String, Integer> hitCounts = new LinkedHashMap<>();
+        for (ProductMetadata product : eligibleProducts) {
+            int hits = metadataHitCount(product, queries);
+            if (hits > 0 && StringUtils.hasText(product.getProductId())) {
+                hitCounts.put(product.getProductId(), hits);
+            }
+        }
+
+        List<String> rankedProductIds = hitCounts.entrySet().stream()
+                .sorted(Map.Entry.<String, Integer>comparingByValue(Comparator.reverseOrder())
+                        .thenComparing(Map.Entry::getKey))
+                .map(Map.Entry::getKey)
+                .toList();
+        Map<String, Integer> rankByProductId = new LinkedHashMap<>();
+        for (int index = 0; index < rankedProductIds.size(); index++) {
+            rankByProductId.put(rankedProductIds.get(index), index + 1);
+        }
+
+        for (Map.Entry<String, ProductKnowledgeEvidence> entry : byChunk.entrySet()) {
+            Integer rank = rankByProductId.get(entry.getValue().productId());
+            if (rank != null) {
+                scores.merge(entry.getKey(), 1.0 / (k + rank), Double::sum);
+            }
+        }
+    }
+
+    private int metadataHitCount(ProductMetadata product, List<String> queries) {
+        String metadata = String.join("\n",
+                        nullToEmpty(product.getEligibilityConditions()),
+                        nullToEmpty(product.getProductCategory()),
+                        nullToEmpty(product.getIncomeType()))
+                .toLowerCase(Locale.ROOT);
+        int hits = 0;
+        for (String query : queries) {
+            if (metadata.contains(query.toLowerCase(Locale.ROOT))) {
+                hits++;
+            }
+        }
+        return hits;
+    }
+
+    private List<ProductKnowledgeEvidence> roundRobinByProduct(
+            List<ProductKnowledgeEvidence> sorted,
+            int topK) {
+        if (sorted.isEmpty() || topK <= 0) {
+            return List.of();
+        }
+
+        Map<String, List<ProductKnowledgeEvidence>> byProduct = new LinkedHashMap<>();
+        for (ProductKnowledgeEvidence evidence : sorted) {
+            byProduct.computeIfAbsent(evidence.productId(), ignored -> new ArrayList<>()).add(evidence);
+        }
+
+        List<ProductKnowledgeEvidence> result = new ArrayList<>();
+        for (int round = 0; result.size() < topK; round++) {
+            boolean added = false;
+            for (List<ProductKnowledgeEvidence> productEvidence : byProduct.values()) {
+                if (round < productEvidence.size()) {
+                    result.add(productEvidence.get(round));
+                    added = true;
+                    if (result.size() == topK) {
+                        break;
+                    }
+                }
+            }
+            if (!added) {
+                break;
+            }
+        }
+        return List.copyOf(result);
+    }
+
+    private ProductKnowledgeEvidence withScore(ProductKnowledgeEvidence evidence, double score) {
+        return new ProductKnowledgeEvidence(
+                evidence.chunkId(),
+                evidence.documentId(),
+                evidence.productId(),
+                evidence.content(),
+                evidence.sourceId(),
+                score);
+    }
+
+    private List<String> normalizeValues(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        Set<String> normalized = new LinkedHashSet<>();
+        for (String value : values) {
+            if (StringUtils.hasText(value)) {
+                normalized.add(value.trim());
+            }
+        }
+        return List.copyOf(normalized);
+    }
+
+    private int recallSize() {
+        return Math.max(20, Math.max(1, properties.topK()) * 3);
+    }
+
+    private ProductRetrievalIssue issue(
+            String stage,
+            String code,
+            String message,
+            List<String> affectedProductIds) {
+        return new ProductRetrievalIssue(stage, code, message, affectedProductIds);
+    }
+
+    private String trimToNull(String value) {
+        return StringUtils.hasText(value) ? value.trim() : null;
+    }
+
+    private String nullToEmpty(String value) {
+        return value == null ? "" : value;
     }
 
     private String normalizeBase(String value) {
