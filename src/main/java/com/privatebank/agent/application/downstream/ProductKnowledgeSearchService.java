@@ -25,14 +25,15 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Product knowledge search used by KYP Agent.
  *
- * <p>MySQL first produces a whitelist from hard business constraints only.
- * Elasticsearch and Qdrant then recall evidence inside that whitelist. Metadata
- * keyword matches are a soft RRF signal and never remove semantically relevant
- * products.
+ * <p>MySQL first applies hard business constraints, then product metadata builds
+ * the candidate set in memory. Elasticsearch and Qdrant recall evidence only
+ * inside the candidate document scope.
  */
 @Slf4j
 @Service
@@ -40,6 +41,9 @@ import java.util.Set;
 public class ProductKnowledgeSearchService {
 
     private static final String ACTIVE = "ACTIVE";
+    private static final Set<String> GENERIC_PRODUCT_TERMS = Set.of("产品", "理财", "理财产品", "产品知识");
+    private static final Set<String> SUITABILITY_TERMS = Set.of("保守型", "稳健型", "平衡型", "成长型", "进取型");
+    private static final Pattern YEAR_RANGE_PATTERN = Pattern.compile("^(\\d+)\\s*[-~—至到]\\s*(\\d+)\\s*年(?:期)?$");
 
     private final ProductMetadataMapper productMetadataMapper;
     private final ProductDocumentIdResolver documentIdResolver;
@@ -79,7 +83,22 @@ public class ProductKnowledgeSearchService {
                 .filter(StringUtils::hasText)
                 .distinct()
                 .toList();
-        ProductDocumentIdResolver.Resolution resolution = documentIdResolver.resolve(eligibleProductIds);
+        List<ProductMetadata> matchedProducts = selectMetadataCandidates(eligibleProducts, effectiveQueries);
+        if (matchedProducts.isEmpty()) {
+            issues.add(issue(
+                    "MYSQL_METADATA",
+                    "NO_METADATA_MATCH",
+                    "合规产品中没有产品元数据与检索条件匹配",
+                    eligibleProductIds));
+            return new ProductKnowledgeSearchResult(List.of(), List.of(), issues);
+        }
+
+        List<String> matchedProductIds = matchedProducts.stream()
+                .map(ProductMetadata::getProductId)
+                .filter(StringUtils::hasText)
+                .distinct()
+                .toList();
+        ProductDocumentIdResolver.Resolution resolution = documentIdResolver.resolve(matchedProductIds);
         if (!resolution.unmappedProductIds().isEmpty()) {
             issues.add(issue(
                     "DOCUMENT_MAPPING",
@@ -92,24 +111,24 @@ public class ProductKnowledgeSearchService {
                     "DOCUMENT_MAPPING",
                     "NO_PRODUCT_DOCUMENT",
                     "合规产品没有可检索的产品知识文档",
-                    eligibleProductIds));
+                    matchedProductIds));
             return new ProductKnowledgeSearchResult(List.of(), List.of(), issues);
         }
 
         String semanticQuery = String.join(" ", effectiveQueries);
         List<ProductKnowledgeEvidence> esEvidence = esSearch(
-                semanticQuery, resolution.documentIds(), resolution.productIdByDocumentId(), eligibleProductIds, issues);
+                semanticQuery, resolution.documentIds(), resolution.productIdByDocumentId(), matchedProductIds, issues);
         List<ProductKnowledgeEvidence> vectorEvidence = qdrantSearch(
-                semanticQuery, resolution.documentIds(), resolution.productIdByDocumentId(), eligibleProductIds, issues);
+                semanticQuery, resolution.documentIds(), resolution.productIdByDocumentId(), matchedProductIds, issues);
         List<ProductKnowledgeEvidence> merged = mergeAndRerank(
-                esEvidence, vectorEvidence, eligibleProducts, effectiveQueries, properties.topK());
+                esEvidence, vectorEvidence, properties.topK());
 
         if (merged.isEmpty()) {
             issues.add(issue(
                     "RETRIEVAL",
                     "NO_PRODUCT_EVIDENCE",
                     "合规产品范围内未召回任何产品知识证据",
-                    eligibleProductIds));
+                    matchedProductIds));
             return new ProductKnowledgeSearchResult(List.of(), List.of(), issues);
         }
 
@@ -132,6 +151,127 @@ public class ProductKnowledgeSearchService {
                 .in(!requestedProductIds.isEmpty(), ProductMetadata::getProductId, requestedProductIds)
                 .orderByAsc(ProductMetadata::getProductId);
         return productMetadataMapper.selectList(wrapper);
+    }
+
+    private List<ProductMetadata> selectMetadataCandidates(
+            List<ProductMetadata> eligibleProducts,
+            List<String> queries) {
+        List<String> terms = metadataTerms(queries);
+        if (terms.isEmpty()) {
+            return eligibleProducts;
+        }
+
+        List<MetadataProductMatch> matches = eligibleProducts.stream()
+                .map(product -> metadataMatch(product, terms))
+                .toList();
+        boolean containsMetadataCondition = matches.stream()
+                .anyMatch(match -> match.recognizedCount() > 0);
+        if (!containsMetadataCondition) {
+            return eligibleProducts;
+        }
+
+        return matches.stream()
+                .filter(match -> !match.contradicted() && match.score() > 0)
+                .sorted(Comparator.comparingInt(MetadataProductMatch::score).reversed()
+                        .thenComparing(match -> nullToEmpty(match.product().getProductId())))
+                .map(MetadataProductMatch::product)
+                .toList();
+    }
+
+    private MetadataProductMatch metadataMatch(ProductMetadata product, List<String> terms) {
+        int recognizedCount = 0;
+        int score = 0;
+        boolean contradicted = false;
+        for (String term : terms) {
+            MetadataTermMatch match = metadataTermMatch(product, term);
+            if (match.recognized()) {
+                recognizedCount++;
+            }
+            if (match.matched()) {
+                score++;
+            }
+            contradicted = contradicted || match.contradicted();
+        }
+        return new MetadataProductMatch(product, recognizedCount, score, contradicted);
+    }
+
+    private MetadataTermMatch metadataTermMatch(ProductMetadata product, String term) {
+        if (GENERIC_PRODUCT_TERMS.contains(term)) {
+            return MetadataTermMatch.ignored();
+        }
+
+        Matcher yearRange = YEAR_RANGE_PATTERN.matcher(term);
+        if (yearRange.matches()) {
+            int minimumDays = Integer.parseInt(yearRange.group(1)) * 365;
+            int maximumDays = Integer.parseInt(yearRange.group(2)) * 365;
+            Integer termDays = product.getTermDays();
+            return MetadataTermMatch.recognized(
+                    termDays != null && termDays >= minimumDays && termDays <= maximumDays);
+        }
+
+        if (SUITABILITY_TERMS.contains(term)) {
+            return MetadataTermMatch.recognized(contains(product.getEligibilityConditions(), term));
+        }
+        if ("低风险".equals(term)) {
+            return MetadataTermMatch.recognized(Set.of("PR1", "PR2").contains(upper(product.getRiskLevel())));
+        }
+        if ("中低风险".equals(term)) {
+            return MetadataTermMatch.recognized(Set.of("PR1", "PR2", "PR3").contains(upper(product.getRiskLevel())));
+        }
+        if ("固收".equals(term) || "固收类".equals(term)) {
+            return MetadataTermMatch.recognized(
+                    contains(product.getProductCategory(), "固定收益")
+                            || contains(product.getProductCategory(), "固收"));
+        }
+        if ("本金安全".equals(term) || "保本".equals(term)) {
+            String incomeType = nullToEmpty(product.getIncomeType());
+            boolean nonPrincipalProtected = incomeType.contains("非保本");
+            boolean principalProtected = !nonPrincipalProtected && incomeType.contains("保本");
+            return new MetadataTermMatch(true, principalProtected, nonPrincipalProtected);
+        }
+        if ("确定性收益".equals(term) || "确定收益".equals(term)) {
+            String incomeType = nullToEmpty(product.getIncomeType());
+            boolean floating = incomeType.contains("浮动");
+            boolean deterministic = !floating
+                    && (incomeType.contains("固定") || incomeType.contains("保证") || incomeType.contains("确定"));
+            return new MetadataTermMatch(true, deterministic, floating);
+        }
+
+        boolean directMatch = metadataText(product).contains(term);
+        return directMatch ? MetadataTermMatch.recognized(true) : MetadataTermMatch.ignored();
+    }
+
+    private List<String> metadataTerms(List<String> queries) {
+        Set<String> terms = new LinkedHashSet<>();
+        for (String query : queries) {
+            for (String term : query.toLowerCase(Locale.ROOT).split("[\\s,，;；、|/]+")) {
+                if (StringUtils.hasText(term)) {
+                    terms.add(term.trim());
+                }
+            }
+        }
+        return List.copyOf(terms);
+    }
+
+    private String metadataText(ProductMetadata product) {
+        return String.join("\n",
+                        nullToEmpty(product.getProductName()),
+                        nullToEmpty(product.getProductCategory()),
+                        nullToEmpty(product.getIncomeType()),
+                        nullToEmpty(product.getOperationMode()),
+                        nullToEmpty(product.getTermType()),
+                        nullToEmpty(product.getLiquidityRule()),
+                        nullToEmpty(product.getTargetCustomer()),
+                        nullToEmpty(product.getEligibilityConditions()))
+                .toLowerCase(Locale.ROOT);
+    }
+
+    private boolean contains(String value, String expected) {
+        return nullToEmpty(value).toLowerCase(Locale.ROOT).contains(expected.toLowerCase(Locale.ROOT));
+    }
+
+    private String upper(String value) {
+        return nullToEmpty(value).trim().toUpperCase(Locale.ROOT);
     }
 
     private List<ProductKnowledgeEvidence> esSearch(
@@ -371,15 +511,12 @@ public class ProductKnowledgeSearchService {
     private List<ProductKnowledgeEvidence> mergeAndRerank(
             List<ProductKnowledgeEvidence> esEvidence,
             List<ProductKnowledgeEvidence> vectorEvidence,
-            List<ProductMetadata> eligibleProducts,
-            List<String> queries,
             int topK) {
         Map<String, Double> scores = new LinkedHashMap<>();
         Map<String, ProductKnowledgeEvidence> byChunk = new LinkedHashMap<>();
 
         addRrf(scores, byChunk, esEvidence, properties.rrfK());
         addRrf(scores, byChunk, vectorEvidence, properties.rrfK());
-        addMetadataRrf(scores, byChunk, eligibleProducts, queries, properties.rrfK());
 
         List<ProductKnowledgeEvidence> sorted = scores.entrySet().stream()
                 .sorted(Map.Entry.<String, Double>comparingByValue(Comparator.reverseOrder()))
@@ -402,53 +539,6 @@ public class ProductKnowledgeSearchService {
             byChunk.putIfAbsent(item.chunkId(), item);
             rank++;
         }
-    }
-
-    private void addMetadataRrf(
-            Map<String, Double> scores,
-            Map<String, ProductKnowledgeEvidence> byChunk,
-            List<ProductMetadata> eligibleProducts,
-            List<String> queries,
-            int k) {
-        Map<String, Integer> hitCounts = new LinkedHashMap<>();
-        for (ProductMetadata product : eligibleProducts) {
-            int hits = metadataHitCount(product, queries);
-            if (hits > 0 && StringUtils.hasText(product.getProductId())) {
-                hitCounts.put(product.getProductId(), hits);
-            }
-        }
-
-        List<String> rankedProductIds = hitCounts.entrySet().stream()
-                .sorted(Map.Entry.<String, Integer>comparingByValue(Comparator.reverseOrder())
-                        .thenComparing(Map.Entry::getKey))
-                .map(Map.Entry::getKey)
-                .toList();
-        Map<String, Integer> rankByProductId = new LinkedHashMap<>();
-        for (int index = 0; index < rankedProductIds.size(); index++) {
-            rankByProductId.put(rankedProductIds.get(index), index + 1);
-        }
-
-        for (Map.Entry<String, ProductKnowledgeEvidence> entry : byChunk.entrySet()) {
-            Integer rank = rankByProductId.get(entry.getValue().productId());
-            if (rank != null) {
-                scores.merge(entry.getKey(), 1.0 / (k + rank), Double::sum);
-            }
-        }
-    }
-
-    private int metadataHitCount(ProductMetadata product, List<String> queries) {
-        String metadata = String.join("\n",
-                        nullToEmpty(product.getEligibilityConditions()),
-                        nullToEmpty(product.getProductCategory()),
-                        nullToEmpty(product.getIncomeType()))
-                .toLowerCase(Locale.ROOT);
-        int hits = 0;
-        for (String query : queries) {
-            if (metadata.contains(query.toLowerCase(Locale.ROOT))) {
-                hits++;
-            }
-        }
-        return hits;
     }
 
     private List<ProductKnowledgeEvidence> roundRobinByProduct(
@@ -527,5 +617,26 @@ public class ProductKnowledgeSearchService {
 
     private String normalizeBase(String value) {
         return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
+    }
+
+    private record MetadataProductMatch(
+            ProductMetadata product,
+            int recognizedCount,
+            int score,
+            boolean contradicted) {
+    }
+
+    private record MetadataTermMatch(
+            boolean recognized,
+            boolean matched,
+            boolean contradicted) {
+
+        private static MetadataTermMatch ignored() {
+            return new MetadataTermMatch(false, false, false);
+        }
+
+        private static MetadataTermMatch recognized(boolean matched) {
+            return new MetadataTermMatch(true, matched, false);
+        }
     }
 }

@@ -56,8 +56,9 @@ class ProductKnowledgeSearchServiceTest {
     }
 
     @Test
-    void usesOnlyHardBusinessRulesForWhitelist() {
-        ProductMetadata product = product("P-1", "与查询词无关");
+    void loadsHardWhitelistOnceAndFiltersMetadataInMemory() {
+        ProductMetadata product = product("P-1", "稳健型");
+        product.setProductCategory("固定收益类");
         ProductMetadataMapper metadataMapper = mock(ProductMetadataMapper.class);
         ProductDocumentIdResolver documentResolver = mock(ProductDocumentIdResolver.class);
         ProductKnowledgeSearchService service = service(metadataMapper, documentResolver, disabledProperties());
@@ -75,8 +76,10 @@ class ProductKnowledgeSearchServiceTest {
         assertThat(wrapperCaptor.getValue().getSqlSegment())
                 .contains("product_status", "risk_level")
                 .doesNotContain("eligibility_conditions", "product_category", "income_type");
+        verify(documentResolver).resolve(List.of("P-1"));
         assertThat(result.retrievalIssues()).extracting("code")
-                .contains("ELASTICSEARCH_NOT_CONFIGURED", "QDRANT_NOT_CONFIGURED", "NO_PRODUCT_EVIDENCE");
+                .contains("ELASTICSEARCH_NOT_CONFIGURED", "QDRANT_NOT_CONFIGURED", "NO_PRODUCT_EVIDENCE")
+                .doesNotContain("NO_METADATA_MATCH");
     }
 
     @Test
@@ -96,6 +99,50 @@ class ProductKnowledgeSearchServiceTest {
         verify(metadataMapper).selectList(wrapperCaptor.capture());
         assertThat(wrapperCaptor.getValue().getSqlSegment()).contains("product_id");
         verify(documentResolver).resolve(List.of("P-1"));
+    }
+
+    @Test
+    void resolvesOnlyProductsMatchedByMetadataTerms() {
+        ProductMetadata matched = product("P-1", "稳健型、平衡型");
+        matched.setProductCategory("固定收益类");
+        matched.setRiskLevel("PR2");
+        ProductMetadata unmatched = product("P-2", "成长型、进取型");
+        unmatched.setProductCategory("权益类");
+        unmatched.setRiskLevel("PR4");
+        ProductMetadataMapper metadataMapper = mock(ProductMetadataMapper.class);
+        ProductDocumentIdResolver documentResolver = mock(ProductDocumentIdResolver.class);
+        ProductKnowledgeSearchService service = service(metadataMapper, documentResolver, disabledProperties());
+        when(metadataMapper.selectList(any())).thenReturn(List.of(unmatched, matched));
+        when(documentResolver.resolve(List.of("P-1"))).thenReturn(
+                new ProductDocumentIdResolver.Resolution(List.of(), Map.of(), List.of("P-1")));
+
+        ProductKnowledgeSearchResult result = service.search(
+                List.of("稳健型 固收类 理财产品"), null, null, null);
+
+        verify(metadataMapper).selectList(any());
+        verify(documentResolver).resolve(List.of("P-1"));
+        assertThat(result.retrievalIssues()).extracting("code")
+                .contains("MISSING_DOCUMENT_MAPPING", "NO_PRODUCT_DOCUMENT")
+                .doesNotContain("NO_METADATA_MATCH");
+    }
+
+    @Test
+    void rejectsContradictoryPrincipalSafetyMetadataBeforeEvidenceRecall() {
+        ProductMetadata product = product("P-1", "稳健型");
+        product.setProductCategory("固定收益类");
+        product.setIncomeType("非保本浮动收益型");
+        ProductMetadataMapper metadataMapper = mock(ProductMetadataMapper.class);
+        ProductDocumentIdResolver documentResolver = mock(ProductDocumentIdResolver.class);
+        ProductKnowledgeSearchService service = service(metadataMapper, documentResolver, disabledProperties());
+        when(metadataMapper.selectList(any())).thenReturn(List.of(product));
+
+        ProductKnowledgeSearchResult result = service.search(
+                List.of("稳健型 本金安全 确定性收益"), null, null, null);
+
+        assertThat(result.candidateProductIds()).isEmpty();
+        assertThat(result.evidence()).isEmpty();
+        assertThat(result.retrievalIssues()).extracting("code").containsExactly("NO_METADATA_MATCH");
+        verify(documentResolver, never()).resolve(any());
     }
 
     @Test
