@@ -23,6 +23,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -63,7 +64,7 @@ class DownstreamAgentExecutionServiceTest {
         when(fixture.stateService.claim("WF-1", AgentType.PRODUCT_EXPERT)).thenReturn(Optional.of(claim));
         when(fixture.artifactMapper.selectById("ART-KYC")).thenReturn(artifact(
                 "ART-KYC", AgentType.CUSTOMER_INSIGHT, "{\"analysis\":{}}"));
-        when(fixture.searchService.search(anyString(), isNull(), isNull(), eq("ACTIVE")))
+        when(fixture.searchService.search(anyList(), isNull(), isNull(), eq("ACTIVE")))
                 .thenReturn(new ProductKnowledgeSearchResult(List.of("P-1"), List.of(evidence)));
         when(fixture.productExecutor.execute(any())).thenReturn(new AgentExecutionResult<>(
                 new KypRecommendationResult("KYP", "C-1", "ART-KYC", List.of(), List.of(), List.of(), List.of(),
