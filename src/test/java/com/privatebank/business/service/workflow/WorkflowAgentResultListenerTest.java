@@ -1,6 +1,8 @@
 package com.privatebank.business.service.workflow;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.privatebank.agent.domain.event.AgentFailedEvent;
+import com.privatebank.agent.infrastructure.workflow.AgentWorkflowStateService;
 import com.privatebank.agent.domain.event.AgentSucceededEvent;
 import com.privatebank.business.entity.workflow.AgentArtifact;
 import com.privatebank.business.entity.workflow.AgentState;
@@ -12,6 +14,7 @@ import com.privatebank.business.mapper.workflow.AgentArtifactMapper;
 import com.privatebank.business.mapper.workflow.AgentStateMapper;
 import com.privatebank.business.mapper.workflow.WorkflowStateMapper;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.ApplicationEventPublisher;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -31,7 +34,13 @@ class WorkflowAgentResultListenerTest {
         AgentArtifactMapper artifactMapper = mock(AgentArtifactMapper.class);
         WorkflowEventHub eventHub = mock(WorkflowEventHub.class);
         WorkflowAgentResultListener listener = new WorkflowAgentResultListener(
-                workflowMapper, agentStateMapper, artifactMapper, eventHub);
+                workflowMapper,
+                agentStateMapper,
+                artifactMapper,
+                mock(AgentWorkflowStateService.class),
+                eventHub,
+                mock(ApplicationEventPublisher.class),
+                new ObjectMapper().findAndRegisterModules());
         WorkflowState workflow = workflow(WorkflowStatus.RUNNING);
         AgentState state = agentState(AgentStatus.SUCCESS, "EXE-1");
         AgentArtifact artifact = artifact("ART-1", "EXE-1");
@@ -55,7 +64,13 @@ class WorkflowAgentResultListenerTest {
         AgentArtifactMapper artifactMapper = mock(AgentArtifactMapper.class);
         WorkflowEventHub eventHub = mock(WorkflowEventHub.class);
         WorkflowAgentResultListener listener = new WorkflowAgentResultListener(
-                workflowMapper, agentStateMapper, artifactMapper, eventHub);
+                workflowMapper,
+                agentStateMapper,
+                artifactMapper,
+                mock(AgentWorkflowStateService.class),
+                eventHub,
+                mock(ApplicationEventPublisher.class),
+                new ObjectMapper().findAndRegisterModules());
         WorkflowState workflow = workflow(WorkflowStatus.RUNNING);
         AgentState state = agentState(AgentStatus.FAILED, "EXE-1");
         state.setErrorMessage("Model invocation failed");
@@ -80,7 +95,13 @@ class WorkflowAgentResultListenerTest {
         AgentArtifactMapper artifactMapper = mock(AgentArtifactMapper.class);
         WorkflowEventHub eventHub = mock(WorkflowEventHub.class);
         WorkflowAgentResultListener listener = new WorkflowAgentResultListener(
-                workflowMapper, agentStateMapper, artifactMapper, eventHub);
+                workflowMapper,
+                agentStateMapper,
+                artifactMapper,
+                mock(AgentWorkflowStateService.class),
+                eventHub,
+                mock(ApplicationEventPublisher.class),
+                new ObjectMapper().findAndRegisterModules());
         when(workflowMapper.selectById("WF-1")).thenReturn(workflow(WorkflowStatus.CANCELED));
         when(agentStateMapper.selectById("AS-1")).thenReturn(agentState(AgentStatus.SUCCESS, "EXE-1"));
         when(artifactMapper.selectById("ART-1")).thenReturn(artifact("ART-1", "EXE-1"));

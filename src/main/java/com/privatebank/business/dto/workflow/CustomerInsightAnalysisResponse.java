@@ -25,7 +25,20 @@ public record CustomerInsightAnalysisResponse(
             List<String> riskAlerts,
             List<String> recommendedActions,
             List<String> dataGaps,
-            GraphAssessment graphAssessment) {
+            GraphAssessment graphAssessment,
+            List<FollowUpQuestion> followUpQuestions) {
+
+        public Analysis(
+                String riskLevel,
+                String summary,
+                List<Finding> findings,
+                List<String> riskAlerts,
+                List<String> recommendedActions,
+                List<String> dataGaps,
+                GraphAssessment graphAssessment) {
+            this(riskLevel, summary, findings, riskAlerts, recommendedActions, dataGaps,
+                    graphAssessment, List.of());
+        }
     }
 
     public record Finding(
@@ -39,5 +52,10 @@ public record CustomerInsightAnalysisResponse(
             String contribution,
             String summary,
             List<String> evidenceRefs) {
+    }
+
+    public record FollowUpQuestion(
+            String id,
+            String question) {
     }
 }

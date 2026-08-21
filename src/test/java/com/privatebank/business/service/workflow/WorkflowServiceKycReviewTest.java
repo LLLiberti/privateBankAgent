@@ -12,13 +12,18 @@ import com.privatebank.business.dto.workflow.CustomerInsightRetryRequest;
 import com.privatebank.business.dto.workflow.CustomerManagerWorkflowResponse;
 import com.privatebank.business.dto.workflow.CreateWorkflowRequest;
 import com.privatebank.business.dto.workflow.WorkflowInputRequest;
+import com.privatebank.business.dto.workflow.ReviewRequest;
 import com.privatebank.business.entity.workflow.AgentArtifact;
 import com.privatebank.business.entity.workflow.AgentState;
 import com.privatebank.business.entity.workflow.WorkflowState;
+import com.privatebank.business.entity.workflow.WorkflowReview;
+import com.privatebank.agent.domain.event.AgentExecutionRequestedEvent;
+import com.privatebank.agent.domain.kyc.KycQaItem;
 import com.privatebank.business.enums.auth.RoleName;
 import com.privatebank.business.enums.workflow.AgentStatus;
 import com.privatebank.business.enums.workflow.AgentType;
 import com.privatebank.business.enums.workflow.WorkflowStatus;
+import com.privatebank.business.enums.workflow.ReviewStatus;
 import com.privatebank.business.mapper.customer.CustomerDataMapper;
 import com.privatebank.business.mapper.workflow.AgentArtifactMapper;
 import com.privatebank.business.mapper.workflow.AgentStateMapper;
@@ -35,6 +40,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -164,6 +170,79 @@ class WorkflowServiceKycReviewTest {
                 "WF-1", "请补充客户近期流动性安排", List.of("近期流动性安排")));
         verify(fixture.artifactMapper, never()).insert(any(AgentArtifact.class));
         verify(fixture.eventPublisher, never()).publishEvent(any(DownstreamAgentsReadyEvent.class));
+    }
+
+    @Test
+    void regeneratesKycWithAnswersAndPreservesQaHistory() {
+        Fixture fixture = fixture();
+        WorkflowState workflow = workflow();
+        AgentArtifact current = kycArtifact("ART-1", 1);
+        current.setResult("""
+                {"contractVersion":"kyc-result.v2","analysis":{
+                  "riskLevel":"MEDIUM","summary":"已有分析","findings":[],"riskAlerts":[],
+                  "recommendedActions":[],"dataGaps":["缺少流动性安排"],
+                  "followUpQuestions":[
+                    {"id":"Q1","question":"P-1近期是否有流动性安排？"},
+                    {"id":"Q2","question":"P-1是否有跨境配置需求？"}
+                  ],
+                  "graphAssessment":{"contribution":"NOT_AVAILABLE","summary":"无图谱","evidenceRefs":[]}
+                },"qaHistory":[
+                  {"questionId":"Q1","question":"P-1近期是否有流动性安排？","answer":"旧回答"}
+                ]}
+                """);
+        AgentState kycState = agentState(AgentType.CUSTOMER_INSIGHT, AgentStatus.SUCCESS);
+        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
+        when(fixture.artifactMapper.selectById("ART-1")).thenReturn(current);
+        when(fixture.artifactMapper.selectOne(anyArtifactQuery())).thenReturn(current);
+        when(fixture.agentStateMapper.selectOne(anyAgentStateQuery())).thenReturn(kycState);
+        when(fixture.agentStateMapper.updateById(any(AgentState.class))).thenReturn(1);
+        when(fixture.workflowMapper.updateById(any(WorkflowState.class))).thenReturn(1);
+        when(fixture.agentStateMapper.selectList(anyAgentStateQuery())).thenReturn(List.of(kycState));
+
+        var response = fixture.service.provideInput(principal(), "WF-1", "answer-key",
+                new WorkflowInputRequest(WorkflowInputRequest.Action.SUPPLEMENT, "ART-1",
+                        null, List.of(),
+                        List.of(
+                                new WorkflowInputRequest.Answer("Q1", "新回答：近期有流动性安排"),
+                                new WorkflowInputRequest.Answer("Q2", "没有跨境配置需求"))));
+
+        assertThat(response.workflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
+        ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(fixture.eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue()).isEqualTo(new KycRegenerationRequestedEvent(
+                "WF-1", null, List.of(),
+                List.of(
+                        new KycQaItem("Q1", "P-1近期是否有流动性安排？", "新回答：近期有流动性安排"),
+                        new KycQaItem("Q2", "P-1是否有跨境配置需求？", "没有跨境配置需求"))));
+        verify(fixture.artifactMapper, never()).insert(any(AgentArtifact.class));
+    }
+
+    @Test
+    void rejectsAnswerForUnknownQuestionId() {
+        Fixture fixture = fixture();
+        WorkflowState workflow = workflow();
+        AgentArtifact current = kycArtifact("ART-1", 1);
+        current.setResult("""
+                {"contractVersion":"kyc-result.v2","analysis":{
+                  "riskLevel":"MEDIUM","summary":"已有分析","findings":[],"riskAlerts":[],
+                  "recommendedActions":[],"dataGaps":[],
+                  "followUpQuestions":[{"id":"Q1","question":"P-1近期是否有流动性安排？"}],
+                  "graphAssessment":{"contribution":"NOT_AVAILABLE","summary":"无图谱","evidenceRefs":[]}
+                }}
+                """);
+        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
+        when(fixture.artifactMapper.selectById("ART-1")).thenReturn(current);
+        when(fixture.artifactMapper.selectOne(anyArtifactQuery())).thenReturn(current);
+
+        assertThatThrownBy(() -> fixture.service.provideInput(principal(), "WF-1", "bad-answer-key",
+                new WorkflowInputRequest(WorkflowInputRequest.Action.SUPPLEMENT, "ART-1",
+                        null, List.of(),
+                        List.of(new WorkflowInputRequest.Answer("Q9", "不存在的问题")))))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("问题ID不存在于当前客户洞察分析");
+
+        verify(fixture.agentStateMapper, never()).updateById(any(AgentState.class));
+        verify(fixture.eventPublisher, never()).publishEvent(any(KycRegenerationRequestedEvent.class));
     }
 
     @Test
@@ -347,6 +426,46 @@ class WorkflowServiceKycReviewTest {
     }
 
     @Test
+    void rejectsReviewAndReleasesCfsWithLatestInputArtifacts() {
+        Fixture fixture = fixture();
+        WorkflowState workflow = workflow();
+        workflow.setWorkflowStatus(WorkflowStatus.WAITING_REVIEW);
+        AgentArtifact cfs = artifact("ART-CFS", AgentType.SOLUTION_DESIGN);
+        AgentArtifact compliance = artifact("ART-COMPLIANCE", AgentType.COMPLIANCE_CHECK);
+        compliance.setComplianceResult("PASS");
+        compliance.setResult("{\"cfsArtifactId\":\"ART-CFS\"}");
+        AgentState cfsState = agentState(AgentType.SOLUTION_DESIGN, AgentStatus.SUCCESS);
+        cfsState.setExecutionId("EXE-CFS-OLD");
+        AgentArtifact kyc = artifact("ART-KYC", AgentType.CUSTOMER_INSIGHT);
+        AgentArtifact market = artifact("ART-MARKET", AgentType.MARKET_INSIGHT);
+        AgentArtifact product = artifact("ART-PRODUCT", AgentType.PRODUCT_EXPERT);
+        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
+        when(fixture.artifactMapper.selectById("ART-CFS")).thenReturn(cfs);
+        when(fixture.artifactMapper.selectById("ART-COMPLIANCE")).thenReturn(compliance);
+        when(fixture.reviewMapper.selectOne(any())).thenReturn(null);
+        when(fixture.reviewMapper.insert(any(WorkflowReview.class))).thenReturn(1);
+        when(fixture.agentStateMapper.selectOne(anyAgentStateQuery())).thenReturn(cfsState);
+        when(fixture.agentStateMapper.updateById(any(AgentState.class))).thenReturn(1);
+        when(fixture.workflowMapper.updateById(any(WorkflowState.class))).thenReturn(1);
+        when(fixture.artifactMapper.selectOne(anyArtifactQuery())).thenReturn(kyc, market, product);
+
+        var response = fixture.service.review(principal(), "WF-1", "review-reject-key",
+                new ReviewRequest("ART-CFS", "ART-COMPLIANCE", ReviewRequest.Decision.REJECT, "请重新生成CFS"));
+
+        assertThat(response.reviewStatus()).isEqualTo(ReviewStatus.REJECTED);
+        assertThat(response.workflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
+        assertThat(workflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
+        assertThat(cfsState.getAgentStatus()).isEqualTo(AgentStatus.READY);
+        assertThat(cfsState.getExecutionId()).startsWith("EXE-").isNotEqualTo("EXE-CFS-OLD");
+        ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(fixture.eventPublisher).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getValue()).isEqualTo(new AgentExecutionRequestedEvent(
+                "WF-1", AgentType.SOLUTION_DESIGN, Map.of(
+                        "kycArtifactId", "ART-KYC",
+                        "marketArtifactId", "ART-MARKET",
+                        "kypArtifactId", "ART-PRODUCT")));
+    }
+    @Test
     void rejectsEmptySupplementBeforeItCanStartARegeneration() {
         Fixture fixture = fixture();
         WorkflowState workflow = workflow();
@@ -363,11 +482,85 @@ class WorkflowServiceKycReviewTest {
         verify(fixture.eventPublisher, never()).publishEvent(any(KycRegenerationRequestedEvent.class));
     }
 
+    @Test
+    void rejectsDuplicateAnswersForSameQuestionId() {
+        Fixture fixture = fixture();
+        WorkflowState workflow = workflow();
+        AgentArtifact current = kycArtifact("ART-1", 1);
+        current.setResult("""
+                {"contractVersion":"kyc-result.v2","analysis":{
+                  "riskLevel":"MEDIUM","summary":"existing analysis","findings":[],"riskAlerts":[],
+                  "recommendedActions":[],"dataGaps":[],
+                  "followUpQuestions":[{"id":"Q1","question":"confirm liquidity arrangement"}],
+                  "graphAssessment":{"contribution":"NOT_AVAILABLE","summary":"no graph","evidenceRefs":[]}
+                }}
+                """);
+        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
+        when(fixture.artifactMapper.selectById("ART-1")).thenReturn(current);
+        when(fixture.artifactMapper.selectOne(anyArtifactQuery())).thenReturn(current);
+
+        assertThatThrownBy(() -> fixture.service.provideInput(principal(), "WF-1", "duplicate-answer-key",
+                new WorkflowInputRequest(WorkflowInputRequest.Action.SUPPLEMENT, "ART-1", null, List.of(),
+                        List.of(
+                                new WorkflowInputRequest.Answer("Q1", "answer-one"),
+                                new WorkflowInputRequest.Answer("Q1", "answer-two")))))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("同一个问题不能重复提交回答");
+
+        verify(fixture.agentStateMapper, never()).updateById(any(AgentState.class));
+        verify(fixture.eventPublisher, never()).publishEvent(any(KycRegenerationRequestedEvent.class));
+    }
+
+    @Test
+    void concurrentRequestsWithSameIdempotencyKeyRegenerateKycOnce() throws Exception {
+        Fixture fixture = fixture();
+        WorkflowState workflow = workflow();
+        AgentArtifact current = kycArtifact("ART-1", 1);
+        AgentState kycState = agentState(AgentType.CUSTOMER_INSIGHT, AgentStatus.SUCCESS);
+        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
+        when(fixture.artifactMapper.selectById("ART-1")).thenReturn(current);
+        when(fixture.artifactMapper.selectOne(anyArtifactQuery())).thenReturn(current);
+        when(fixture.agentStateMapper.selectOne(anyAgentStateQuery())).thenReturn(kycState);
+        when(fixture.agentStateMapper.updateById(any(AgentState.class))).thenReturn(1);
+        when(fixture.workflowMapper.updateById(any(WorkflowState.class))).thenReturn(1);
+        when(fixture.agentStateMapper.selectList(anyAgentStateQuery())).thenReturn(List.of(kycState));
+
+        WorkflowInputRequest request = new WorkflowInputRequest(
+                WorkflowInputRequest.Action.SUPPLEMENT, "ART-1",
+                "add liquidity arrangement", List.of());
+        java.util.concurrent.CountDownLatch ready = new java.util.concurrent.CountDownLatch(2);
+        java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+        try (var pool = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            var first = pool.submit(() -> submitAfterStart(fixture, request, ready, start));
+            var second = pool.submit(() -> submitAfterStart(fixture, request, ready, start));
+            assertThat(ready.await(2, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            assertThat(first.get(5, java.util.concurrent.TimeUnit.SECONDS)).isNotNull();
+            assertThat(second.get(5, java.util.concurrent.TimeUnit.SECONDS)).isNotNull();
+        }
+
+        verify(fixture.eventPublisher).publishEvent(any(KycRegenerationRequestedEvent.class));
+        verify(fixture.agentStateMapper).updateById(any(AgentState.class));
+        verify(fixture.workflowMapper).updateById(any(WorkflowState.class));
+    }
+
+    private Object submitAfterStart(
+            Fixture fixture,
+            WorkflowInputRequest request,
+            java.util.concurrent.CountDownLatch ready,
+            java.util.concurrent.CountDownLatch start) throws Exception {
+        ready.countDown();
+        if (!start.await(2, java.util.concurrent.TimeUnit.SECONDS)) {
+            throw new IllegalStateException("concurrent test did not start");
+        }
+        return fixture.service.provideInput(principal(), "WF-1", "same-idempotency-key", request);
+    }
+
     @SuppressWarnings("unchecked")
     private static Wrapper<AgentArtifact> anyArtifactQuery() {
         return any(Wrapper.class);
-    }
 
+    }
     @SuppressWarnings("unchecked")
     private static Wrapper<AgentState> anyAgentStateQuery() {
         return any(Wrapper.class);
@@ -381,11 +574,12 @@ class WorkflowServiceKycReviewTest {
         ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
         CustomerDataMapper customerDataMapper = mock(CustomerDataMapper.class);
         ImportBatchMapper importBatchMapper = mock(ImportBatchMapper.class);
+        WorkflowReviewMapper reviewMapper = mock(WorkflowReviewMapper.class);
         WorkflowService service = new WorkflowService(
                 workflowMapper,
                 agentStateMapper,
                 artifactMapper,
-                mock(WorkflowReviewMapper.class),
+                reviewMapper,
                 customerDataMapper,
                 importBatchMapper,
                 currentUserService,
@@ -396,7 +590,7 @@ class WorkflowServiceKycReviewTest {
                 mock(FileStorageService.class),
                 new CustomerInsightAliasRestorer());
         return new Fixture(service, workflowMapper, agentStateMapper, artifactMapper, eventPublisher,
-                customerDataMapper, importBatchMapper);
+                customerDataMapper, importBatchMapper, reviewMapper);
     }
 
     private CustomerSummaryResponse customer() {
@@ -416,6 +610,14 @@ class WorkflowServiceKycReviewTest {
         return workflow;
     }
 
+    private AgentArtifact artifact(String artifactId, AgentType type) {
+        AgentArtifact artifact = new AgentArtifact();
+        artifact.setArtifactId(artifactId);
+        artifact.setWorkflowId("WF-1");
+        artifact.setAgentType(type);
+        artifact.setVersion(1);
+        return artifact;
+    }
     private AgentArtifact kycArtifact(String artifactId, int version) {
         AgentArtifact artifact = new AgentArtifact();
         artifact.setArtifactId(artifactId);
@@ -443,6 +645,7 @@ class WorkflowServiceKycReviewTest {
             AgentArtifactMapper artifactMapper,
             ApplicationEventPublisher eventPublisher,
             CustomerDataMapper customerDataMapper,
-            ImportBatchMapper importBatchMapper) {
+            ImportBatchMapper importBatchMapper,
+            WorkflowReviewMapper reviewMapper) {
     }
 }

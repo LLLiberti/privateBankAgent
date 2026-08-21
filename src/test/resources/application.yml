@@ -12,12 +12,12 @@ mybatis-plus:
 private-bank:
   security:
     jwt:
-  graph:
-    enabled: false
       secret: test-secret-test-secret-test-secret-123456
       issuer: private-bank-test
       ttl-minutes: 120
       renewal-threshold-minutes: 30
+  graph:
+    enabled: false
   storage:
     root: ./target/test-storage
     max-file-size-bytes: 1048576

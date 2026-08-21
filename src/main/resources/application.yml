@@ -64,10 +64,15 @@ private-bank:
   knowledge:
     qdrant:
       host: ${PRIVATE_BANK_QDRANT_HOST:124.220.33.106}
-      port: ${PRIVATE_BANK_QDRANT_PORT:6334}
+      port: ${PRIVATE_BANK_QDRANT_PORT:6333}
       api-key: ${PRIVATE_BANK_QDRANT_API_KEY:84f0abc6e09105509f02ea82d66bce7761428fd4bae5f5616ae4aba7f372a3e4}
       collection-name: ${PRIVATE_BANK_QDRANT_COLLECTION:}
       initialize-schema: ${PRIVATE_BANK_QDRANT_INITIALIZE_SCHEMA:false}
+    embedding:
+      base-url: ${PRIVATE_BANK_EMBEDDING_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+      api-key: ${PRIVATE_BANK_EMBEDDING_API_KEY:}
+      model: ${PRIVATE_BANK_EMBEDDING_MODEL:text-embedding-v4}
+      dimensions: ${PRIVATE_BANK_EMBEDDING_DIMENSIONS:1024}
   security:
     jwt:
       secret: 5614c60a743654ca88265373126e80540b4b6614aca204fd6aedc0e94bbc1770
