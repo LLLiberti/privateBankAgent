@@ -57,14 +57,19 @@ public class AgentWorkflowStateService {
         state.setFinishTime(null);
         requireUpdated(agentStateMapper.updateById(state), agentType + " Agent 状态已被并发修改");
 
-        workflow.setWorkflowStatus(WorkflowStatus.RUNNING);
-        workflow.setErrorCode(null);
-        workflow.setErrorMessage(null);
-        if (workflow.getStartTime() == null) {
-            workflow.setStartTime(now);
+        if (workflow.getWorkflowStatus() != WorkflowStatus.RUNNING
+                || workflow.getErrorCode() != null
+                || workflow.getErrorMessage() != null
+                || workflow.getStartTime() == null) {
+            workflow.setWorkflowStatus(WorkflowStatus.RUNNING);
+            workflow.setErrorCode(null);
+            workflow.setErrorMessage(null);
+            if (workflow.getStartTime() == null) {
+                workflow.setStartTime(now);
+            }
+            workflow.setUpdatedAt(now);
+            requireUpdated(workflowMapper.updateById(workflow), "工作流状态已被并发修改");
         }
-        workflow.setUpdatedAt(now);
-        requireUpdated(workflowMapper.updateById(workflow), "工作流状态已被并发修改");
         return Optional.of(new AgentExecutionClaim(
                 workflowId, state.getAgentStateId(), agentType, executionId, workflow.getCreatedBy()));
     }

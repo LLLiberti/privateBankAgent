@@ -52,6 +52,22 @@ class AgentWorkflowStateServiceTest {
     }
 
     @Test
+    void doesNotRewriteAlreadyRunningWorkflowWhenClaimingParallelAgent() {
+        Fixture fixture = fixture();
+        WorkflowState workflow = workflow(WorkflowStatus.RUNNING);
+        workflow.setStartTime(LocalDateTime.now().minusMinutes(1));
+        AgentState state = agentState(AgentType.PRODUCT_EXPERT, AgentStatus.READY, null);
+        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
+        when(fixture.agentStateMapper.selectOne(any())).thenReturn(state);
+        when(fixture.agentStateMapper.updateById(any(AgentState.class))).thenReturn(1);
+
+        Optional<AgentExecutionClaim> result = fixture.service().claim("WF-1", AgentType.PRODUCT_EXPERT);
+
+        assertThat(result).isPresent();
+        verify(fixture.workflowMapper, never()).updateById(any(WorkflowState.class));
+    }
+
+    @Test
     void doesNotClaimRunningOrTerminalAgent() {
         Fixture fixture = fixture();
         WorkflowState workflow = workflow(WorkflowStatus.RUNNING);
