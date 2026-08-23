@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.privatebank.agent.domain.event.AgentExecutionRequestedEvent;
@@ -20,6 +21,10 @@ import com.privatebank.business.dto.workflow.AgentStateResponse;
 import com.privatebank.business.dto.workflow.ArtifactRefResponse;
 import com.privatebank.business.dto.workflow.AvailableImportBatchResponse;
 import com.privatebank.business.dto.workflow.CancelRequest;
+import com.privatebank.business.dto.workflow.CfsReportCenterItemResponse;
+import com.privatebank.business.dto.workflow.CfsReportFileResponse;
+import com.privatebank.business.dto.workflow.CfsReportPreviewResponse;
+import com.privatebank.business.dto.workflow.CfsReportWorkflowRow;
 import com.privatebank.business.dto.workflow.CustomerInsightAnalysisResponse;
 import com.privatebank.business.dto.workflow.CustomerInsightRetryRequest;
 import com.privatebank.business.dto.workflow.CustomerManagerWorkflowResponse;
@@ -36,6 +41,7 @@ import com.privatebank.business.entity.workflow.AgentArtifact;
 import com.privatebank.business.entity.workflow.AgentState;
 import com.privatebank.business.enums.workflow.AgentStatus;
 import com.privatebank.business.enums.workflow.AgentType;
+import com.privatebank.business.enums.workflow.CfsReportStatus;
 import com.privatebank.business.enums.workflow.ReviewStatus;
 import com.privatebank.business.entity.workflow.WorkflowReview;
 import com.privatebank.business.entity.workflow.WorkflowState;
@@ -122,6 +128,61 @@ public class WorkflowService {
         List<CustomerManagerWorkflowResponse> items = workflowMapper.findForCustomerManager(
                 principal.userId(), customerId, status, (pageNo - 1) * pageSize, pageSize);
         return PageResponse.of(items, total, pageNo, pageSize);
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<CfsReportCenterItemResponse> reportCenter(
+            CurrentUserPrincipal principal,
+            Long customerId,
+            String keyword,
+            int pageNo,
+            int pageSize) {
+        if (customerId != null) {
+            currentUserService.requireCustomerAccess(principal, customerId);
+        }
+        String normalizedKeyword = StringUtils.hasText(keyword) ? keyword.trim() : null;
+        long total = workflowMapper.countForReportCenter(
+                principal.userId(), customerId, normalizedKeyword);
+        List<CfsReportCenterItemResponse> items = workflowMapper.findForReportCenter(
+                        principal.userId(), customerId, normalizedKeyword,
+                        (pageNo - 1) * pageSize, pageSize)
+                .stream()
+                .map(this::toReportCenterItem)
+                .toList();
+        return PageResponse.of(items, total, pageNo, pageSize);
+    }
+
+    @Transactional(readOnly = true)
+    public CfsReportPreviewResponse reportPreview(
+            CurrentUserPrincipal principal, String workflowId) {
+        WorkflowState workflow = requireAccessible(principal, workflowId);
+        ReportArtifacts artifacts = requireReportArtifacts(workflowId);
+        requireReportCenterStatus(workflow);
+        JsonNode content = reportContent(artifacts.cfs());
+        List<CfsReportFileResponse> files = reportFiles(content);
+        var customer = customerDataMapper.findSummary(workflow.getPersonId());
+        String customerName = customer == null
+                ? String.valueOf(workflow.getPersonId())
+                : (StringUtils.hasText(customer.displayName()) ? customer.displayName() : customer.fullName());
+        CfsReportStatus reportStatus = reportStatus(workflow);
+        boolean canExport = workflow.getWorkflowStatus() == WorkflowStatus.COMPLETED && !files.isEmpty();
+        return new CfsReportPreviewResponse(
+                workflowId,
+                workflow.getPersonId(),
+                customerName,
+                workflow.getWorkflowStatus(),
+                reportStatus,
+                artifacts.cfs().getArtifactId(),
+                artifacts.cfs().getVersion(),
+                artifacts.cfs().getCreateTime(),
+                artifacts.compliance().getArtifactId(),
+                artifacts.compliance().getComplianceResult(),
+                artifacts.compliance().getCreateTime(),
+                isPendingHumanReview(workflow.getWorkflowStatus()),
+                canExport,
+                files,
+                text(content, "reportExportedAt"),
+                previewContent(content));
     }
 
     private WorkflowCreatedResponse createOnce(CurrentUserPrincipal principal, CreateWorkflowRequest request) {
@@ -344,15 +405,15 @@ public class WorkflowService {
     private ReviewResponse reviewOnce(
             CurrentUserPrincipal principal, String workflowId, ReviewRequest request) {
         WorkflowState workflow = requireAccessible(principal, workflowId);
-        if (workflow.getWorkflowStatus() != WorkflowStatus.WAITING_REVIEW) {
-            throw conflict("当前工作流不允许审核");
-        }
         AgentArtifact cfs = requireArtifact(workflowId, request.cfsArtifactId(), AgentType.SOLUTION_DESIGN);
         AgentArtifact compliance = requireArtifact(
                 workflowId, request.complianceArtifactId(), AgentType.COMPLIANCE_CHECK);
-        if (!"PASS".equals(compliance.getComplianceResult())) {
+        if (!isHumanReviewableCompliance(compliance.getComplianceResult())) {
             throw new BusinessException(HttpStatus.UNPROCESSABLE_ENTITY,
-                    ErrorCode.COMPLIANCE_BLOCKED, "合规结果不是PASS，不能审核通过");
+                    ErrorCode.COMPLIANCE_BLOCKED, "该合规结果不支持人工审核");
+        }
+        if (!isPendingHumanReview(workflow.getWorkflowStatus())) {
+            throw conflict("当前工作流不允许审核");
         }
         verifyComplianceTargetsCfs(compliance, cfs);
 
@@ -376,6 +437,9 @@ public class WorkflowService {
 
         if (request.decision() == ReviewRequest.Decision.APPROVE) {
             workflow.setWorkflowStatus(WorkflowStatus.GENERATING_OUTPUT);
+            workflow.setErrorCode(null);
+            workflow.setErrorMessage(null);
+            workflow.setFinishTime(null);
         } else {
             workflow.setWorkflowStatus(WorkflowStatus.RUNNING);
             ready(workflowId, AgentType.SOLUTION_DESIGN, true);
@@ -383,6 +447,10 @@ public class WorkflowService {
         }
         workflow.setUpdatedAt(LocalDateTime.now());
         updateWorkflow(workflow);
+        if (request.decision() == ReviewRequest.Decision.APPROVE) {
+            eventPublisher.publishEvent(new CfsReportExportRequestedEvent(
+                    workflowId, cfs.getArtifactId(), compliance.getArtifactId()));
+        }
         afterCommit(() -> eventHub.publish(workflowId,
                 request.decision() == ReviewRequest.Decision.APPROVE ? "REVIEW_APPROVED" : "REVIEW_REJECTED",
                 Map.of("workflowId", workflowId, "reviewRound", round, "status", workflow.getWorkflowStatus())));
@@ -430,6 +498,21 @@ public class WorkflowService {
                     && workflow.getWorkflowStatus() != WorkflowStatus.COMPLETED) {
                 throw conflict("当前工作流不能重试输出");
             }
+            AgentArtifact cfs = latestArtifact(workflowId, AgentType.SOLUTION_DESIGN);
+            AgentArtifact compliance = latestArtifact(workflowId, AgentType.COMPLIANCE_CHECK);
+            if (cfs == null || compliance == null
+                    || !isHumanReviewableCompliance(compliance.getComplianceResult())) {
+                throw conflict("Output retry requires a reviewable CFS compliance result");
+            }
+            verifyComplianceTargetsCfs(compliance, cfs);
+            workflow.setWorkflowStatus(WorkflowStatus.GENERATING_OUTPUT);
+            workflow.setErrorCode(null);
+            workflow.setErrorMessage(null);
+            workflow.setFinishTime(null);
+            workflow.setUpdatedAt(LocalDateTime.now());
+            updateWorkflow(workflow);
+            eventPublisher.publishEvent(new CfsReportExportRequestedEvent(
+                    workflowId, cfs.getArtifactId(), compliance.getArtifactId()));
             afterCommit(() -> eventHub.publish(workflowId, "OUTPUT_RETRY_REQUESTED",
                     Map.of("workflowId", workflowId, "formats", request.failedFormats())));
             return new OutputStatusResponse("ACCEPTED", workflow.getWorkflowStatus(),
@@ -508,9 +591,13 @@ public class WorkflowService {
     }
 
     private AgentArtifact latestCustomerInsightArtifact(String workflowId) {
+        return latestArtifact(workflowId, AgentType.CUSTOMER_INSIGHT);
+    }
+
+    private AgentArtifact latestArtifact(String workflowId, AgentType type) {
         return artifactMapper.selectOne(Wrappers.<AgentArtifact>lambdaQuery()
                 .eq(AgentArtifact::getWorkflowId, workflowId)
-                .eq(AgentArtifact::getAgentType, AgentType.CUSTOMER_INSIGHT)
+                .eq(AgentArtifact::getAgentType, type)
                 .orderByDesc(AgentArtifact::getVersion)
                 .last("LIMIT 1"));
     }
@@ -638,7 +725,10 @@ public class WorkflowService {
         }
         try {
             JsonNode result = objectMapper.readTree(compliance.getResult());
-            String cfsArtifactId = result.path("cfsArtifactId").asText();
+            String cfsArtifactId = result.path("cfsArtifactRef").asText(null);
+            if (!StringUtils.hasText(cfsArtifactId)) {
+                cfsArtifactId = result.path("cfsArtifactId").asText(null);
+            }
             if (!cfs.getArtifactId().equals(cfsArtifactId)) {
                 throw new BusinessException(HttpStatus.CONFLICT, ErrorCode.STALE_ARTIFACT, "合规结果与被审核CFS版本不一致");
             }
@@ -671,6 +761,177 @@ public class WorkflowService {
         if (workflowMapper.updateById(workflow) != 1) {
             throw conflict("工作流已被其他请求更新，请刷新后重试");
         }
+    }
+
+    private CfsReportCenterItemResponse toReportCenterItem(CfsReportWorkflowRow row) {
+        ReportArtifacts artifacts = reportArtifacts(row.workflowId());
+        boolean validPair = validReportPair(artifacts);
+        JsonNode content = validPair ? tryReportContent(artifacts.cfs()) : null;
+        List<CfsReportFileResponse> files = content == null ? List.of() : reportFiles(content);
+        CfsReportStatus reportStatus = reportStatus(row.workflowStatus(), row.errorCode());
+        boolean canPreview = validPair && content != null;
+        boolean canReview = canPreview && isPendingHumanReview(row.workflowStatus());
+        boolean canExport = canPreview
+                && row.workflowStatus() == WorkflowStatus.COMPLETED
+                && !files.isEmpty();
+        boolean canRetryExport = row.workflowStatus() == WorkflowStatus.GENERATING_OUTPUT
+                && "CFS_REPORT_EXPORT_FAILED".equals(row.errorCode());
+        return new CfsReportCenterItemResponse(
+                row.workflowId(),
+                row.customerId(),
+                row.customerName(),
+                row.workflowStatus(),
+                reportStatus,
+                row.templateId(),
+                row.asOfDate(),
+                artifacts.cfs() == null ? null : artifacts.cfs().getArtifactId(),
+                artifacts.cfs() == null ? null : artifacts.cfs().getVersion(),
+                artifacts.compliance() == null ? null : artifacts.compliance().getArtifactId(),
+                artifacts.compliance() == null ? null : artifacts.compliance().getComplianceResult(),
+                canPreview,
+                canReview,
+                canExport,
+                canRetryExport,
+                files,
+                content == null ? null : text(content, "reportExportedAt"),
+                row.errorCode(),
+                row.errorMessage(),
+                row.updatedAt());
+    }
+
+    private void requireReportCenterStatus(WorkflowState workflow) {
+        if (!isPendingHumanReview(workflow.getWorkflowStatus())
+                && workflow.getWorkflowStatus() != WorkflowStatus.GENERATING_OUTPUT
+                && workflow.getWorkflowStatus() != WorkflowStatus.COMPLETED) {
+            throw new BusinessException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    ErrorCode.PRECONDITION_FAILED, "CFS尚未通过合规检查，不能预览正式报告");
+        }
+    }
+
+    private CfsReportStatus reportStatus(WorkflowState workflow) {
+        return reportStatus(workflow.getWorkflowStatus(), workflow.getErrorCode());
+    }
+
+    private CfsReportStatus reportStatus(WorkflowStatus workflowStatus, String errorCode) {
+        return switch (workflowStatus) {
+            case WAITING_INPUT, WAITING_REVIEW, FAILED -> CfsReportStatus.PENDING_REVIEW;
+            case GENERATING_OUTPUT -> "CFS_REPORT_EXPORT_FAILED".equals(errorCode)
+                    ? CfsReportStatus.EXPORT_FAILED
+                    : CfsReportStatus.GENERATING;
+            case COMPLETED -> CfsReportStatus.READY;
+            default -> throw new IllegalArgumentException(
+                    "Unsupported report center workflow status: " + workflowStatus);
+        };
+    }
+
+    private ReportArtifacts reportArtifacts(String workflowId) {
+        return new ReportArtifacts(
+                latestArtifact(workflowId, AgentType.SOLUTION_DESIGN),
+                latestArtifact(workflowId, AgentType.COMPLIANCE_CHECK));
+    }
+
+    private ReportArtifacts requireReportArtifacts(String workflowId) {
+        ReportArtifacts artifacts = reportArtifacts(workflowId);
+        if (artifacts.cfs() == null) {
+            throw notFound("最终CFS不存在");
+        }
+        if (artifacts.compliance() == null) {
+            throw notFound("合规检查结果不存在");
+        }
+        if (!isHumanReviewableCompliance(artifacts.compliance().getComplianceResult())) {
+            throw new BusinessException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    ErrorCode.COMPLIANCE_BLOCKED, "该合规结果不支持人工审核");
+        }
+        verifyComplianceTargetsCfs(artifacts.compliance(), artifacts.cfs());
+        return artifacts;
+    }
+
+    private boolean validReportPair(ReportArtifacts artifacts) {
+        if (artifacts.cfs() == null
+                || artifacts.compliance() == null
+                || !isHumanReviewableCompliance(artifacts.compliance().getComplianceResult())) {
+            return false;
+        }
+        try {
+            verifyComplianceTargetsCfs(artifacts.compliance(), artifacts.cfs());
+            return true;
+        } catch (BusinessException exception) {
+            return false;
+        }
+    }
+    private boolean isHumanReviewableCompliance(String complianceResult) {
+        return "PASS".equalsIgnoreCase(complianceResult)
+                || "REVIEW_REQUIRED".equalsIgnoreCase(complianceResult);
+    }
+
+    private boolean isPendingHumanReview(WorkflowStatus workflowStatus) {
+        return workflowStatus == WorkflowStatus.WAITING_INPUT
+                || workflowStatus == WorkflowStatus.WAITING_REVIEW
+                || workflowStatus == WorkflowStatus.FAILED;
+    }
+
+
+    private JsonNode reportContent(AgentArtifact artifact) {
+        if (artifact == null || !StringUtils.hasText(artifact.getResult())) {
+            throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR,
+                    ErrorCode.INTERNAL_ERROR, "CFS报告内容为空");
+        }
+        try {
+            JsonNode content = objectMapper.readTree(artifact.getResult());
+            if (!content.isObject()) {
+                throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR,
+                        ErrorCode.INTERNAL_ERROR, "CFS报告内容格式无效");
+            }
+            return content;
+        } catch (JsonProcessingException exception) {
+            throw new BusinessException(HttpStatus.INTERNAL_SERVER_ERROR,
+                    ErrorCode.INTERNAL_ERROR, "CFS报告内容格式无效");
+        }
+    }
+
+    private JsonNode tryReportContent(AgentArtifact artifact) {
+        try {
+            return reportContent(artifact);
+        } catch (BusinessException exception) {
+            return null;
+        }
+    }
+
+    private JsonNode previewContent(JsonNode content) {
+        ObjectNode preview = (ObjectNode) content.deepCopy();
+        preview.remove("files");
+        return preview;
+    }
+
+    private List<CfsReportFileResponse> reportFiles(JsonNode content) {
+        JsonNode files = content.path("files");
+        if (!files.isArray()) {
+            return List.of();
+        }
+        List<CfsReportFileResponse> result = new ArrayList<>();
+        for (JsonNode file : files) {
+            if (!file.isObject() || !StringUtils.hasText(text(file, "fileId"))) {
+                continue;
+            }
+            result.add(new CfsReportFileResponse(
+                    text(file, "fileId"),
+                    text(file, "format"),
+                    text(file, "fileName"),
+                    text(file, "contentType"),
+                    file.has("sizeBytes") && file.path("sizeBytes").canConvertToLong()
+                            ? file.path("sizeBytes").asLong()
+                            : null,
+                    text(file, "generatedAt")));
+        }
+        return List.copyOf(result);
+    }
+
+    private String text(JsonNode root, String field) {
+        String value = root.path(field).asText(null);
+        return StringUtils.hasText(value) ? value : null;
+    }
+
+    private record ReportArtifacts(AgentArtifact cfs, AgentArtifact compliance) {
     }
 
     private List<Map<String, Object>> extractFiles(AgentArtifact artifact) {

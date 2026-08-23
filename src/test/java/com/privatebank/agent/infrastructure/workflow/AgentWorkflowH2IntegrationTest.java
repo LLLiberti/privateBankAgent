@@ -32,9 +32,11 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.jdbc.Sql;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -64,6 +66,7 @@ class AgentWorkflowH2IntegrationTest {
     @Autowired AgentStateMapper agentMapper;
     @Autowired AgentArtifactMapper artifactMapper;
     @Autowired ObjectMapper objectMapper;
+    @Autowired JdbcTemplate jdbcTemplate;
     @Autowired EventRecorder recorder;
 
     @MockBean CurrentUserService currentUserService;
@@ -73,6 +76,44 @@ class AgentWorkflowH2IntegrationTest {
     @MockBean DownstreamAgentWorkflowListener downstreamListener;
     @MockBean DownstreamAgentExecutionService downstreamExecutionService;
     @MockBean KycCustomerDataLoader customerDataLoader;
+    @Test
+    void reportCenterMapperReturnsOnlyScopedReviewableAndExportableWorkflows() {
+        jdbcTemplate.update(
+                "INSERT INTO person(person_id, full_name, display_name) VALUES (?, ?, ?)",
+                9001L, "李四", "P-9001");
+        jdbcTemplate.update(
+                "INSERT INTO user_customer_scope(user_id, person_id, scope_status) VALUES (?, ?, ?)",
+                "USER-REPORT", 9001L, 1);
+
+        workflowMapper.insert(reportWorkflow(
+                "WF-REPORT-PENDING", "USER-REPORT", WorkflowStatus.WAITING_INPUT));
+        workflowMapper.insert(reportWorkflow(
+                "WF-REPORT-RUNNING", "USER-REPORT", WorkflowStatus.RUNNING));
+        workflowMapper.insert(reportWorkflow(
+                "WF-REPORT-OTHER", "OTHER-USER", WorkflowStatus.COMPLETED));
+
+        LocalDateTime artifactTime = LocalDateTime.of(2026, 8, 21, 20, 1);
+        insertReportArtifact("ART-CFS-PENDING", "WF-REPORT-PENDING",
+                AgentType.SOLUTION_DESIGN, null, "{\"cfsVersion\":1}", artifactTime);
+        insertReportArtifact("ART-COMPLIANCE-PENDING", "WF-REPORT-PENDING",
+                AgentType.COMPLIANCE_CHECK, "REVIEW_REQUIRED",
+                "{\"cfsArtifactRef\":\"ART-CFS-PENDING\"}", artifactTime.plusMinutes(1));
+        insertReportArtifact("ART-CFS-RUNNING", "WF-REPORT-RUNNING",
+                AgentType.SOLUTION_DESIGN, null, "{\"cfsVersion\":1}", artifactTime);
+        insertReportArtifact("ART-COMPLIANCE-RUNNING", "WF-REPORT-RUNNING",
+                AgentType.COMPLIANCE_CHECK, "REVIEW_REQUIRED",
+                "{\"cfsArtifactRef\":\"ART-CFS-RUNNING\"}", artifactTime.plusMinutes(1));
+
+        assertThat(workflowMapper.countForReportCenter("USER-REPORT", null, null)).isEqualTo(1);
+        assertThat(workflowMapper.findForReportCenter(
+                "USER-REPORT", null, "P-9001", 0, 20))
+                .singleElement()
+                .satisfies(row -> {
+                    assertThat(row.workflowId()).isEqualTo("WF-REPORT-PENDING");
+                    assertThat(row.customerName()).isEqualTo("P-9001");
+                    assertThat(row.workflowStatus()).isEqualTo(WorkflowStatus.WAITING_INPUT);
+                });
+    }
     @MockBean KycDataMaskingService maskingService;
     @MockBean KycAgentExecutor kycExecutor;
 
@@ -195,6 +236,33 @@ class AgentWorkflowH2IntegrationTest {
                 .isEqualTo(AgentStatus.PENDING);
         verify(maskingService).mask(any(KycCustomerData.class),
                 eq(new KycRuntimeSupplement(null, List.of(), List.of(qa))));
+    }
+
+    private void insertReportArtifact(
+            String artifactId, String workflowId, AgentType type,
+            String complianceResult, String result, LocalDateTime createTime) {
+        jdbcTemplate.update("""
+                INSERT INTO agent_artifact(
+                    artifact_id, workflow_id, agent_state_id, agent_type, execution_id,
+                    compliance_result, result, storage_key, version, create_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+                """, artifactId, workflowId, "AS-" + artifactId, type.name(),
+                "EXE-" + artifactId, complianceResult, result, 1, createTime);
+    }
+
+    private WorkflowState reportWorkflow(
+            String workflowId, String createdBy, WorkflowStatus status) {
+        WorkflowState workflow = new WorkflowState();
+        workflow.setWorkflowId(workflowId);
+        workflow.setPersonId(9001L);
+        workflow.setCreatedBy(createdBy);
+        workflow.setAsOfDate(LocalDate.of(2026, 8, 21));
+        workflow.setTemplateId("CFS-3P6-V1");
+        workflow.setWorkflowStatus(status);
+        workflow.setVersion(0L);
+        workflow.setCreatedAt(LocalDateTime.of(2026, 8, 21, 20, 0));
+        workflow.setUpdatedAt(LocalDateTime.of(2026, 8, 21, 20, 0));
+        return workflow;
     }
 
     private void configureKyc() {

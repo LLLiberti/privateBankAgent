@@ -22,6 +22,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -68,7 +69,7 @@ public class DownstreamAgentExecutionService {
         try {
             AgentArtifact kyc = artifact(kycArtifactId);
             ProductKnowledgeSearchResult searchResult = productKnowledgeSearchService.search(
-                    "客户产品需求", null, null, "ACTIVE");
+                    List.of("客户产品需求"), null, null, "ACTIVE");
             ProductExpertInput input = new ProductExpertInput(
                     workflowId,
                     kycArtifactId,

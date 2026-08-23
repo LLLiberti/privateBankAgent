@@ -22,6 +22,8 @@
         <agentscope-java.version>2.0.0</agentscope-java.version>
         <reactor-core.version>3.8.2</reactor-core.version>
         <mybatis-plus.version>3.5.17</mybatis-plus.version>
+        <apache-poi.version>5.5.1</apache-poi.version>
+        <pdfbox.version>3.0.8</pdfbox.version>
     </properties>
 
     <dependencyManagement>
@@ -91,6 +93,16 @@
         <dependency>
             <groupId>org.neo4j.driver</groupId>
             <artifactId>neo4j-java-driver</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>${apache-poi.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>${pdfbox.version}</version>
         </dependency>
         <dependency>
             <groupId>org.projectlombok</groupId>
