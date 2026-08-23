@@ -114,6 +114,7 @@ class WorkflowAgentResultListenerDownstreamTest {
         assertThat(fixture.workflowMapper.selectById("WF-1")).isNotNull();
         verify(fixture.workflowMapper).updateById(any(WorkflowState.class));
         assertThat(fixture.lastWorkflowStatus()).isEqualTo(WorkflowStatus.WAITING_REVIEW);
+        verifyNoInteractions(fixture.eventPublisher);
         verify(fixture.eventHub).publish(eq("WF-1"), eq("COMPLIANCE_PASSED"), any());
     }
 
@@ -149,11 +150,12 @@ class WorkflowAgentResultListenerDownstreamTest {
     }
 
     @Test
-    void asksForManagerInputWhenComplianceNeedsReview() {
+    void movesToWaitingReviewWhenComplianceNeedsHumanReview() {
         Fixture fixture = fixture();
         AgentState state = agentState(AgentType.COMPLIANCE_CHECK, AgentStatus.SUCCESS, "EXE-COMPLIANCE");
         AgentArtifact artifact = artifact(
-                "ART-COMPLIANCE", AgentType.COMPLIANCE_CHECK, "EXE-COMPLIANCE", "{}");
+                "ART-COMPLIANCE", AgentType.COMPLIANCE_CHECK, "EXE-COMPLIANCE",
+                "{\"cfsArtifactRef\":\"ART-CFS\"}");
         artifact.setComplianceResult("REVIEW_REQUIRED");
         when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow());
         when(fixture.agentStateMapper.selectById("AS-COMPLIANCE_CHECK")).thenReturn(state);
@@ -163,7 +165,7 @@ class WorkflowAgentResultListenerDownstreamTest {
         fixture.listener().onAgentSucceeded(new AgentSucceededEvent(
                 "WF-1", "AS-COMPLIANCE_CHECK", AgentType.COMPLIANCE_CHECK, "EXE-COMPLIANCE", "ART-COMPLIANCE"));
 
-        assertThat(fixture.lastWorkflowStatus()).isEqualTo(WorkflowStatus.WAITING_INPUT);
+        assertThat(fixture.lastWorkflowStatus()).isEqualTo(WorkflowStatus.WAITING_REVIEW);
         verify(fixture.eventHub).publish(eq("WF-1"), eq("COMPLIANCE_REVIEW_REQUIRED"), any());
         verifyNoInteractions(fixture.eventPublisher);
     }
