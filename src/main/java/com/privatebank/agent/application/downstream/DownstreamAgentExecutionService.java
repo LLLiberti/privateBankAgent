@@ -13,7 +13,6 @@ import com.privatebank.agent.domain.downstream.KypRecommendationResult;
 import com.privatebank.agent.domain.downstream.MarketInsightInput;
 import com.privatebank.agent.domain.downstream.MarketInsightResult;
 import com.privatebank.agent.domain.downstream.ProductExpertInput;
-import com.privatebank.agent.domain.downstream.ProductKnowledgeSearchResult;
 import com.privatebank.agent.infrastructure.workflow.AgentWorkflowStateService;
 import com.privatebank.business.entity.workflow.AgentArtifact;
 import com.privatebank.business.enums.workflow.AgentType;
@@ -38,7 +37,6 @@ public class DownstreamAgentExecutionService {
     private final CfsDesignAgentExecutor cfsDesignExecutor;
     private final CfsDesignResultValidator cfsDesignResultValidator;
     private final ComplianceCheckAgentExecutor complianceCheckExecutor;
-    private final ProductKnowledgeSearchService productKnowledgeSearchService;
     private final ObjectMapper objectMapper;
 
     public void executeMarketInsight(String workflowId, String kycArtifactId) {
@@ -68,14 +66,12 @@ public class DownstreamAgentExecutionService {
         AgentExecutionClaim claim = optional.get();
         try {
             AgentArtifact kyc = artifact(kycArtifactId);
-            ProductKnowledgeSearchResult searchResult = productKnowledgeSearchService.search(
-                    List.of("客户产品需求"), null, null, "ACTIVE");
             ProductExpertInput input = new ProductExpertInput(
                     workflowId,
                     kycArtifactId,
                     kyc.getResult(),
-                    searchResult.candidateProductIds(),
-                    searchResult.evidence());
+                    List.of(),
+                    List.of());
             AgentExecutionResult<KypRecommendationResult> result = productExpertExecutor.execute(
                     new AgentExecutionRequest<>(workflowId, claim.executionId(), claim.agentType(),
                             claim.operatorUserId(), input, Map.of("kycArtifactId", kycArtifactId)));

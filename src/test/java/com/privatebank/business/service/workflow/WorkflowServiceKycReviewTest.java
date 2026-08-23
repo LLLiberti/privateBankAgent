@@ -9,8 +9,10 @@ import com.privatebank.business.dto.customer.CustomerSummaryResponse;
 import com.privatebank.business.dto.workflow.AvailableImportBatchResponse;
 import com.privatebank.business.dto.workflow.CustomerInsightAnalysisResponse;
 import com.privatebank.business.dto.workflow.CustomerInsightRetryRequest;
+import com.privatebank.business.dto.workflow.CfsReportWorkflowRow;
 import com.privatebank.business.dto.workflow.CustomerManagerWorkflowResponse;
 import com.privatebank.business.dto.workflow.CreateWorkflowRequest;
+import com.privatebank.business.dto.workflow.OutputRetryRequest;
 import com.privatebank.business.dto.workflow.WorkflowInputRequest;
 import com.privatebank.business.dto.workflow.ReviewRequest;
 import com.privatebank.business.entity.workflow.AgentArtifact;
@@ -21,6 +23,7 @@ import com.privatebank.agent.domain.event.AgentExecutionRequestedEvent;
 import com.privatebank.agent.domain.kyc.KycQaItem;
 import com.privatebank.business.enums.auth.RoleName;
 import com.privatebank.business.enums.workflow.AgentStatus;
+import com.privatebank.business.enums.workflow.CfsReportStatus;
 import com.privatebank.business.enums.workflow.AgentType;
 import com.privatebank.business.enums.workflow.WorkflowStatus;
 import com.privatebank.business.enums.workflow.ReviewStatus;
@@ -101,6 +104,94 @@ class WorkflowServiceKycReviewTest {
 
         assertThat(response.items()).containsExactly(workflow);
         assertThat(response.total()).isEqualTo(1);
+    }
+
+    @Test
+    void listsReportsAfterComplianceAndExposesActionsByLifecycleState() {
+        Fixture fixture = fixture();
+        LocalDateTime updatedAt = LocalDateTime.of(2026, 8, 21, 20, 30);
+        CfsReportWorkflowRow pending = new CfsReportWorkflowRow(
+                "WF-PENDING", 100L, "Pending Customer", WorkflowStatus.WAITING_INPUT,
+                "CFS-3P6-V1", LocalDate.of(2026, 8, 20), null, null, updatedAt);
+        CfsReportWorkflowRow ready = new CfsReportWorkflowRow(
+                "WF-READY", 101L, "Ready Customer", WorkflowStatus.COMPLETED,
+                "CFS-3P6-V1", LocalDate.of(2026, 8, 19), null, null, updatedAt);
+
+        AgentArtifact pendingCfs = artifact("ART-CFS-PENDING", AgentType.SOLUTION_DESIGN);
+        pendingCfs.setWorkflowId("WF-PENDING");
+        pendingCfs.setResult("{\"customerId\":\"P-100\",\"cfsVersion\":2,\"cfsStructure\":{}}");
+        AgentArtifact pendingCompliance = artifact("ART-COMP-PENDING", AgentType.COMPLIANCE_CHECK);
+        pendingCompliance.setWorkflowId("WF-PENDING");
+        pendingCompliance.setComplianceResult("REVIEW_REQUIRED");
+        pendingCompliance.setResult("{\"cfsArtifactRef\":\"ART-CFS-PENDING\"}");
+
+        AgentArtifact readyCfs = artifact("ART-CFS-READY", AgentType.SOLUTION_DESIGN);
+        readyCfs.setWorkflowId("WF-READY");
+        readyCfs.setResult("""
+                {"customerId":"P-101","cfsVersion":3,"cfsStructure":{},
+                 "reportExportedAt":"2026-08-21T20:31:00+08:00",
+                 "files":[{"fileId":"FILE-PDF","format":"PDF","fileName":"report.pdf",
+                   "contentType":"application/pdf","sizeBytes":128,
+                   "path":"reports/internal/report.pdf","generatedAt":"2026-08-21T20:31:00+08:00"}]}
+                """);
+        AgentArtifact readyCompliance = artifact("ART-COMP-READY", AgentType.COMPLIANCE_CHECK);
+        readyCompliance.setWorkflowId("WF-READY");
+        readyCompliance.setComplianceResult("PASS");
+        readyCompliance.setResult("{\"cfsArtifactRef\":\"ART-CFS-READY\"}");
+
+        when(fixture.workflowMapper.countForReportCenter("U-1", null, null)).thenReturn(2L);
+        when(fixture.workflowMapper.findForReportCenter("U-1", null, null, 0, 20))
+                .thenReturn(List.of(pending, ready));
+        when(fixture.artifactMapper.selectOne(anyArtifactQuery()))
+                .thenReturn(pendingCfs, pendingCompliance, readyCfs, readyCompliance);
+
+        var response = fixture.service.reportCenter(principal(), null, null, 1, 20);
+
+        assertThat(response.total()).isEqualTo(2);
+        assertThat(response.items().get(0).reportStatus()).isEqualTo(CfsReportStatus.PENDING_REVIEW);
+        assertThat(response.items().get(0).canPreview()).isTrue();
+        assertThat(response.items().get(0).canReview()).isTrue();
+        assertThat(response.items().get(0).canExport()).isFalse();
+        assertThat(response.items().get(1).reportStatus()).isEqualTo(CfsReportStatus.READY);
+        assertThat(response.items().get(1).canReview()).isFalse();
+        assertThat(response.items().get(1).canExport()).isTrue();
+        assertThat(response.items().get(1).files()).singleElement().satisfies(file -> {
+            assertThat(file.fileId()).isEqualTo("FILE-PDF");
+            assertThat(file.format()).isEqualTo("PDF");
+            assertThat(file.sizeBytes()).isEqualTo(128L);
+        });
+    }
+
+    @Test
+    void previewsCompliantCfsBeforeHumanApproval() {
+        Fixture fixture = fixture();
+        WorkflowState workflow = workflow();
+        workflow.setWorkflowStatus(WorkflowStatus.WAITING_INPUT);
+        AgentArtifact cfs = artifact("ART-CFS", AgentType.SOLUTION_DESIGN);
+        cfs.setCreateTime(LocalDateTime.of(2026, 8, 21, 20, 0));
+        cfs.setResult("""
+                {"customerId":"P-100","cfsVersion":4,
+                 "cfsStructure":{"chapter1CustomerInfo":"客户概况"},
+                 "marketingStrategy":"营销策略"}
+                """);
+        AgentArtifact compliance = artifact("ART-COMPLIANCE", AgentType.COMPLIANCE_CHECK);
+        compliance.setComplianceResult("REVIEW_REQUIRED");
+        compliance.setCreateTime(LocalDateTime.of(2026, 8, 21, 20, 5));
+        compliance.setResult("{\"cfsArtifactRef\":\"ART-CFS\"}");
+        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
+        when(fixture.artifactMapper.selectOne(anyArtifactQuery())).thenReturn(cfs, compliance);
+        when(fixture.customerDataMapper.findSummary(100L)).thenReturn(customer());
+
+        var response = fixture.service.reportPreview(principal(), "WF-1");
+
+        assertThat(response.reportStatus()).isEqualTo(CfsReportStatus.PENDING_REVIEW);
+        assertThat(response.canReview()).isTrue();
+        assertThat(response.canExport()).isFalse();
+        assertThat(response.cfsArtifactId()).isEqualTo("ART-CFS");
+        assertThat(response.complianceArtifactId()).isEqualTo("ART-COMPLIANCE");
+        assertThat(response.content().path("cfsStructure").path("chapter1CustomerInfo").asText())
+                .isEqualTo("客户概况");
+        assertThat(response.content().has("files")).isFalse();
     }
 
     @Test
@@ -423,6 +514,56 @@ class WorkflowServiceKycReviewTest {
         verify(fixture.eventPublisher).publishEvent(eventCaptor.capture());
         assertThat(eventCaptor.getValue()).isEqualTo(new DownstreamAgentsReadyEvent(
                 "WF-1", "ART-2", List.of(AgentType.MARKET_INSIGHT, AgentType.PRODUCT_EXPERT)));
+    }
+
+    @Test
+    void approvesFinalReviewAndRequestsReportExport() {
+        Fixture fixture = fixture();
+        WorkflowState workflow = workflow();
+        workflow.setWorkflowStatus(WorkflowStatus.WAITING_INPUT);
+        AgentArtifact cfs = artifact("ART-CFS", AgentType.SOLUTION_DESIGN);
+        AgentArtifact compliance = artifact("ART-COMPLIANCE", AgentType.COMPLIANCE_CHECK);
+        compliance.setComplianceResult("REVIEW_REQUIRED");
+        compliance.setResult("{\"cfsArtifactRef\":\"ART-CFS\"}");
+        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
+        when(fixture.artifactMapper.selectById("ART-CFS")).thenReturn(cfs);
+        when(fixture.artifactMapper.selectById("ART-COMPLIANCE")).thenReturn(compliance);
+        when(fixture.reviewMapper.selectOne(any())).thenReturn(null);
+        when(fixture.reviewMapper.insert(any(WorkflowReview.class))).thenReturn(1);
+        when(fixture.workflowMapper.updateById(workflow)).thenReturn(1);
+
+        var response = fixture.service.review(principal(), "WF-1", "review-approve-key",
+                new ReviewRequest("ART-CFS", "ART-COMPLIANCE", ReviewRequest.Decision.APPROVE, "approved"));
+
+        assertThat(response.reviewStatus()).isEqualTo(ReviewStatus.APPROVED);
+        assertThat(response.workflowStatus()).isEqualTo(WorkflowStatus.GENERATING_OUTPUT);
+        assertThat(workflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.GENERATING_OUTPUT);
+        verify(fixture.eventPublisher).publishEvent(new CfsReportExportRequestedEvent(
+                "WF-1", "ART-CFS", "ART-COMPLIANCE"));
+    }
+
+    @Test
+    void retriesAStuckOrHistoricalOutputAndRequestsReportExport() {
+        Fixture fixture = fixture();
+        WorkflowState workflow = workflow();
+        workflow.setWorkflowStatus(WorkflowStatus.COMPLETED);
+        workflow.setFinishTime(LocalDateTime.now());
+        AgentArtifact cfs = artifact("ART-CFS", AgentType.SOLUTION_DESIGN);
+        AgentArtifact compliance = artifact("ART-COMPLIANCE", AgentType.COMPLIANCE_CHECK);
+        compliance.setComplianceResult("REVIEW_REQUIRED");
+        compliance.setResult("{\"cfsArtifactId\":\"ART-CFS\"}");
+        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
+        when(fixture.artifactMapper.selectOne(anyArtifactQuery())).thenReturn(cfs, compliance);
+        when(fixture.workflowMapper.updateById(workflow)).thenReturn(1);
+
+        var response = fixture.service.retryOutput(principal(), "WF-1", "output-retry-key",
+                new OutputRetryRequest(List.of(OutputRetryRequest.Format.PDF)));
+
+        assertThat(response.workflowStatus()).isEqualTo(WorkflowStatus.GENERATING_OUTPUT);
+        assertThat(workflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.GENERATING_OUTPUT);
+        assertThat(workflow.getFinishTime()).isNull();
+        verify(fixture.eventPublisher).publishEvent(new CfsReportExportRequestedEvent(
+                "WF-1", "ART-CFS", "ART-COMPLIANCE"));
     }
 
     @Test

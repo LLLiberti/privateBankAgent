@@ -1,6 +1,7 @@
 package com.privatebank.business.mapper.workflow;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.privatebank.business.dto.workflow.CfsReportWorkflowRow;
 import com.privatebank.business.dto.workflow.CustomerManagerWorkflowResponse;
 import com.privatebank.business.entity.workflow.WorkflowState;
 import com.privatebank.business.enums.workflow.WorkflowStatus;
@@ -69,6 +70,118 @@ public interface WorkflowStateMapper extends BaseMapper<WorkflowState> {
             @Param("userId") String userId,
             @Param("customerId") Long customerId,
             @Param("status") WorkflowStatus status,
+            @Param("offset") int offset,
+            @Param("pageSize") int pageSize);
+
+    @Select("""
+            <script>
+            SELECT COUNT(*)
+              FROM workflow_state w
+              JOIN person p ON p.person_id = w.person_id
+             WHERE w.created_by = #{userId}
+               AND w.workflow_status IN ('WAITING_INPUT', 'WAITING_REVIEW', 'GENERATING_OUTPUT', 'COMPLETED', 'FAILED')
+               AND EXISTS (
+                   SELECT 1
+                     FROM agent_artifact compliance
+                    WHERE compliance.workflow_id = w.workflow_id
+                      AND compliance.agent_type = 'COMPLIANCE_CHECK'
+                      AND UPPER(compliance.compliance_result) IN ('PASS', 'REVIEW_REQUIRED')
+                      AND compliance.version = (
+                          SELECT MAX(latest_compliance.version)
+                            FROM agent_artifact latest_compliance
+                           WHERE latest_compliance.workflow_id = w.workflow_id
+                             AND latest_compliance.agent_type = 'COMPLIANCE_CHECK'
+                      )
+               )
+               AND EXISTS (
+                   SELECT 1
+                     FROM agent_artifact cfs
+                    WHERE cfs.workflow_id = w.workflow_id
+                      AND cfs.agent_type = 'SOLUTION_DESIGN'
+               )
+               AND EXISTS (
+                   SELECT 1
+                     FROM user_customer_scope ucs
+                    WHERE ucs.user_id = #{userId}
+                      AND ucs.person_id = w.person_id
+                      AND ucs.scope_status = 1
+               )
+            <if test="customerId != null">
+               AND w.person_id = #{customerId}
+            </if>
+            <if test="keyword != null and keyword != ''">
+               AND (
+                   w.workflow_id LIKE CONCAT('%', #{keyword}, '%')
+                   OR w.template_id LIKE CONCAT('%', #{keyword}, '%')
+                   OR COALESCE(NULLIF(p.display_name, ''), p.full_name) LIKE CONCAT('%', #{keyword}, '%')
+               )
+            </if>
+            </script>
+            """)
+    long countForReportCenter(
+            @Param("userId") String userId,
+            @Param("customerId") Long customerId,
+            @Param("keyword") String keyword);
+
+    @Select("""
+            <script>
+            SELECT w.workflow_id AS workflowId,
+                   w.person_id AS customerId,
+                   COALESCE(NULLIF(p.display_name, ''), p.full_name) AS customerName,
+                   w.workflow_status AS workflowStatus,
+                   w.template_id AS templateId,
+                   w.as_of_date AS asOfDate,
+                   w.error_code AS errorCode,
+                   w.error_message AS errorMessage,
+                   w.updated_at AS updatedAt
+              FROM workflow_state w
+              JOIN person p ON p.person_id = w.person_id
+             WHERE w.created_by = #{userId}
+               AND w.workflow_status IN ('WAITING_INPUT', 'WAITING_REVIEW', 'GENERATING_OUTPUT', 'COMPLETED', 'FAILED')
+               AND EXISTS (
+                   SELECT 1
+                     FROM agent_artifact compliance
+                    WHERE compliance.workflow_id = w.workflow_id
+                      AND compliance.agent_type = 'COMPLIANCE_CHECK'
+                      AND UPPER(compliance.compliance_result) IN ('PASS', 'REVIEW_REQUIRED')
+                      AND compliance.version = (
+                          SELECT MAX(latest_compliance.version)
+                            FROM agent_artifact latest_compliance
+                           WHERE latest_compliance.workflow_id = w.workflow_id
+                             AND latest_compliance.agent_type = 'COMPLIANCE_CHECK'
+                      )
+               )
+               AND EXISTS (
+                   SELECT 1
+                     FROM agent_artifact cfs
+                    WHERE cfs.workflow_id = w.workflow_id
+                      AND cfs.agent_type = 'SOLUTION_DESIGN'
+               )
+               AND EXISTS (
+                   SELECT 1
+                     FROM user_customer_scope ucs
+                    WHERE ucs.user_id = #{userId}
+                      AND ucs.person_id = w.person_id
+                      AND ucs.scope_status = 1
+               )
+            <if test="customerId != null">
+               AND w.person_id = #{customerId}
+            </if>
+            <if test="keyword != null and keyword != ''">
+               AND (
+                   w.workflow_id LIKE CONCAT('%', #{keyword}, '%')
+                   OR w.template_id LIKE CONCAT('%', #{keyword}, '%')
+                   OR COALESCE(NULLIF(p.display_name, ''), p.full_name) LIKE CONCAT('%', #{keyword}, '%')
+               )
+            </if>
+             ORDER BY w.updated_at DESC, w.workflow_id DESC
+             LIMIT #{pageSize} OFFSET #{offset}
+            </script>
+            """)
+    List<CfsReportWorkflowRow> findForReportCenter(
+            @Param("userId") String userId,
+            @Param("customerId") Long customerId,
+            @Param("keyword") String keyword,
             @Param("offset") int offset,
             @Param("pageSize") int pageSize);
 }
