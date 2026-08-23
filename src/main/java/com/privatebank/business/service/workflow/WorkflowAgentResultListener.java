@@ -168,13 +168,20 @@ public class WorkflowAgentResultListener {
         }
         String complianceResult = artifact.getComplianceResult();
         LocalDateTime now = LocalDateTime.now();
-        if ("PASS".equalsIgnoreCase(complianceResult)) {
+        boolean passed = "PASS".equalsIgnoreCase(complianceResult);
+        boolean requiresHumanReview = "REVIEW_REQUIRED".equalsIgnoreCase(complianceResult);
+        if (passed || requiresHumanReview) {
+            String cfsArtifactId = cfsArtifactIdFrom(artifact);
+            if (cfsArtifactId == null || cfsArtifactId.isBlank()) {
+                throw new IllegalStateException("合规结果缺少cfsArtifactRef，无法生成报告");
+            }
             workflow.setWorkflowStatus(WorkflowStatus.WAITING_REVIEW);
             workflow.setUpdatedAt(now);
             requireUpdated(workflowMapper.updateById(workflow));
-            afterCommit(() -> eventHub.publish(event.workflowId(), "COMPLIANCE_PASSED", Map.of(
+            String eventName = passed ? "COMPLIANCE_PASSED" : "COMPLIANCE_REVIEW_REQUIRED";
+            afterCommit(() -> eventHub.publish(event.workflowId(), eventName, Map.of(
                     "workflowId", event.workflowId(),
-                    "cfsArtifactId", cfsArtifactIdFrom(artifact),
+                    "cfsArtifactId", cfsArtifactId,
                     "complianceArtifactId", artifact.getArtifactId(),
                     "status", WorkflowStatus.WAITING_REVIEW)));
         } else if ("REJECT".equalsIgnoreCase(complianceResult)) {
@@ -198,7 +205,10 @@ public class WorkflowAgentResultListener {
     private String cfsArtifactIdFrom(AgentArtifact complianceArtifact) {
         try {
             JsonNode root = objectMapper.readTree(complianceArtifact.getResult());
-            return root.path("cfsArtifactRef").asText(null);
+            String reference = root.path("cfsArtifactRef").asText(null);
+            return reference == null || reference.isBlank()
+                    ? root.path("cfsArtifactId").asText(null)
+                    : reference;
         } catch (Exception exception) {
             return null;
         }

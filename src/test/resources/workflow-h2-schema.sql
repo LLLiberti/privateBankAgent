@@ -2,6 +2,22 @@ DROP TABLE IF EXISTS agent_artifact;
 DROP TABLE IF EXISTS agent_state;
 DROP TABLE IF EXISTS workflow_state;
 
+DROP TABLE IF EXISTS user_customer_scope;
+DROP TABLE IF EXISTS person;
+
+CREATE TABLE person (
+    person_id BIGINT PRIMARY KEY,
+    full_name VARCHAR(255),
+    display_name VARCHAR(255)
+);
+
+CREATE TABLE user_customer_scope (
+    user_id VARCHAR(64) NOT NULL,
+    person_id BIGINT NOT NULL,
+    scope_status INT NOT NULL,
+    PRIMARY KEY (user_id, person_id)
+);
+
 CREATE TABLE workflow_state (
     workflow_id VARCHAR(64) PRIMARY KEY,
     person_id BIGINT,

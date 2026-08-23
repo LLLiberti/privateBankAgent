@@ -9,6 +9,6 @@ public record OutputRetryRequest(@NotEmpty List<Format> failedFormats) {
     public enum Format {
         WORD,
         PDF,
-        EXCEL
+        MARKDOWN
     }
 }
