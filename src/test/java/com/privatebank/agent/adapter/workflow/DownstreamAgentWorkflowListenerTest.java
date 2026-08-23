@@ -5,6 +5,7 @@ import com.privatebank.agent.domain.event.AgentExecutionRequestedEvent;
 import com.privatebank.business.enums.workflow.AgentType;
 import com.privatebank.business.service.workflow.DownstreamAgentsReadyEvent;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.List;
 import java.util.Map;
@@ -16,21 +17,26 @@ import static org.mockito.Mockito.verifyNoInteractions;
 class DownstreamAgentWorkflowListenerTest {
 
     @Test
-    void dispatchesBothParallelAgentsWhenKycIsApproved() {
+    void publishesIndependentExecutionRequestsWhenKycIsApproved() {
         DownstreamAgentExecutionService executionService = mock(DownstreamAgentExecutionService.class);
-        DownstreamAgentWorkflowListener listener = new DownstreamAgentWorkflowListener(executionService);
+        ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
+        DownstreamAgentWorkflowListener listener = new DownstreamAgentWorkflowListener(executionService, eventPublisher);
 
         listener.onDownstreamAgentsReady(new DownstreamAgentsReadyEvent(
                 "WF-1", "ART-KYC-2", List.of(AgentType.MARKET_INSIGHT, AgentType.PRODUCT_EXPERT)));
 
-        verify(executionService).executeMarketInsight("WF-1", "ART-KYC-2");
-        verify(executionService).executeProductExpert("WF-1", "ART-KYC-2");
+        verify(eventPublisher).publishEvent(new AgentExecutionRequestedEvent(
+                "WF-1", AgentType.MARKET_INSIGHT, Map.of("kycArtifactId", "ART-KYC-2")));
+        verify(eventPublisher).publishEvent(new AgentExecutionRequestedEvent(
+                "WF-1", AgentType.PRODUCT_EXPERT, Map.of("kycArtifactId", "ART-KYC-2")));
+        verifyNoInteractions(executionService);
     }
 
     @Test
     void dispatchesCommittedExecutionRequestsToTheMatchingAgent() {
         DownstreamAgentExecutionService executionService = mock(DownstreamAgentExecutionService.class);
-        DownstreamAgentWorkflowListener listener = new DownstreamAgentWorkflowListener(executionService);
+        DownstreamAgentWorkflowListener listener = new DownstreamAgentWorkflowListener(
+                executionService, mock(ApplicationEventPublisher.class));
 
         listener.onAgentExecutionRequested(new AgentExecutionRequestedEvent(
                 "WF-1", AgentType.MARKET_INSIGHT, Map.of("kycArtifactId", "ART-KYC")));
@@ -53,7 +59,8 @@ class DownstreamAgentWorkflowListenerTest {
     @Test
     void ignoresUnexpectedKycExecutionRequest() {
         DownstreamAgentExecutionService executionService = mock(DownstreamAgentExecutionService.class);
-        DownstreamAgentWorkflowListener listener = new DownstreamAgentWorkflowListener(executionService);
+        DownstreamAgentWorkflowListener listener = new DownstreamAgentWorkflowListener(
+                executionService, mock(ApplicationEventPublisher.class));
 
         listener.onAgentExecutionRequested(new AgentExecutionRequestedEvent(
                 "WF-1", AgentType.CUSTOMER_INSIGHT, Map.of()));
