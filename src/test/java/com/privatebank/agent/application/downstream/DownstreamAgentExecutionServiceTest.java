@@ -8,8 +8,6 @@ import com.privatebank.agent.domain.downstream.CfsDesignResult;
 import com.privatebank.agent.domain.downstream.ComplianceCheckResult;
 import com.privatebank.agent.domain.downstream.KypRecommendationResult;
 import com.privatebank.agent.domain.downstream.MarketInsightResult;
-import com.privatebank.agent.domain.downstream.ProductKnowledgeEvidence;
-import com.privatebank.agent.domain.downstream.ProductKnowledgeSearchResult;
 import com.privatebank.business.entity.workflow.AgentArtifact;
 import com.privatebank.business.enums.workflow.AgentType;
 import com.privatebank.business.mapper.workflow.AgentArtifactMapper;
@@ -23,7 +21,6 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -56,19 +53,15 @@ class DownstreamAgentExecutionServiceTest {
     }
 
     @Test
-    void executesProductExpertWithCandidateAndEvidenceSearchResult() {
+    void executesProductExpertWithKycOnlyAndLetsAgentSearchProducts() {
         Fixture fixture = fixture();
         AgentExecutionClaim claim = claim(AgentType.PRODUCT_EXPERT);
-        ProductKnowledgeEvidence evidence = new ProductKnowledgeEvidence(
-                "CHUNK-1", "DOC-1", "P-1", "product evidence", "SRC-1", 0.8);
         when(fixture.stateService.claim("WF-1", AgentType.PRODUCT_EXPERT)).thenReturn(Optional.of(claim));
         when(fixture.artifactMapper.selectById("ART-KYC")).thenReturn(artifact(
                 "ART-KYC", AgentType.CUSTOMER_INSIGHT, "{\"analysis\":{}}"));
-        when(fixture.searchService.search(anyList(), isNull(), isNull(), eq("ACTIVE")))
-                .thenReturn(new ProductKnowledgeSearchResult(List.of("P-1"), List.of(evidence)));
         when(fixture.productExecutor.execute(any())).thenReturn(new AgentExecutionResult<>(
                 new KypRecommendationResult("KYP", "C-1", "ART-KYC", List.of(), List.of(), List.of(), List.of(),
-                        List.of(), List.of(evidence)),
+                        List.of(), List.of()),
                 1, "model"));
 
         fixture.service.executeProductExpert("WF-1", "ART-KYC");
@@ -79,8 +72,8 @@ class DownstreamAgentExecutionServiceTest {
         assertThat(input).isInstanceOf(com.privatebank.agent.domain.downstream.ProductExpertInput.class);
         com.privatebank.agent.domain.downstream.ProductExpertInput productInput =
                 (com.privatebank.agent.domain.downstream.ProductExpertInput) input;
-        assertThat(productInput.candidateProductIds()).containsExactly("P-1");
-        assertThat(productInput.productKnowledge()).containsExactly(evidence);
+        assertThat(productInput.candidateProductIds()).isEmpty();
+        assertThat(productInput.productKnowledge()).isEmpty();
         verify(fixture.stateService).complete(eq(claim), anyString(), isNull());
     }
 
@@ -140,13 +133,12 @@ class DownstreamAgentExecutionServiceTest {
         CfsDesignAgentExecutor cfsExecutor = mock(CfsDesignAgentExecutor.class);
         CfsDesignResultValidator cfsValidator = mock(CfsDesignResultValidator.class);
         ComplianceCheckAgentExecutor complianceExecutor = mock(ComplianceCheckAgentExecutor.class);
-        ProductKnowledgeSearchService searchService = mock(ProductKnowledgeSearchService.class);
         return new Fixture(
                 stateService, artifactMapper, marketExecutor, productExecutor, cfsExecutor,
-                cfsValidator, complianceExecutor, searchService,
+                cfsValidator, complianceExecutor,
                 new DownstreamAgentExecutionService(
                         stateService, artifactMapper, marketExecutor, productExecutor, cfsExecutor,
-                        cfsValidator, complianceExecutor, searchService,
+                        cfsValidator, complianceExecutor,
                         new ObjectMapper().findAndRegisterModules()));
     }
 
@@ -190,7 +182,6 @@ class DownstreamAgentExecutionServiceTest {
             CfsDesignAgentExecutor cfsExecutor,
             CfsDesignResultValidator cfsValidator,
             ComplianceCheckAgentExecutor complianceExecutor,
-            ProductKnowledgeSearchService searchService,
             DownstreamAgentExecutionService service) {
     }
 }

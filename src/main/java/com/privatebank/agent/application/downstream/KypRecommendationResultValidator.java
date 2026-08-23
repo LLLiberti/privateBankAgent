@@ -22,6 +22,10 @@ public class KypRecommendationResultValidator {
         requireNonNull(result.unresolvedItems(), "unresolvedItems");
         requireNonNull(result.productEvidenceRefs(), "productEvidenceRefs");
 
+        if (!result.recommendedItems().isEmpty() && result.productEvidenceRefs().isEmpty()) {
+            throw new IllegalArgumentException("存在推荐项但 productEvidenceRefs 为空，推荐必须引用产品证据");
+        }
+
         for (int i = 0; i < result.recommendedItems().size(); i++) {
             KypRecommendationResult.RecommendedItem item = result.recommendedItems().get(i);
             if (item == null) {
@@ -32,6 +36,9 @@ public class KypRecommendationResultValidator {
             requireText(item.reason(), "recommendedItems[" + i + "].reason");
             requireNonNull(item.limitations(), "recommendedItems[" + i + "].limitations");
             requireNonNull(item.evidenceRefs(), "recommendedItems[" + i + "].evidenceRefs");
+            if (item.evidenceRefs().isEmpty()) {
+                throw new IllegalArgumentException("recommendedItems[" + i + "].evidenceRefs 不能为空，推荐必须引用产品证据");
+            }
         }
         for (int i = 0; i < result.rejectedItems().size(); i++) {
             KypRecommendationResult.RejectedItem item = result.rejectedItems().get(i);
