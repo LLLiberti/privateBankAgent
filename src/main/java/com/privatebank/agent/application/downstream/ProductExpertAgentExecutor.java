@@ -24,13 +24,16 @@ public class ProductExpertAgentExecutor implements BusinessAgentExecutor<Product
 
     private static final String SYSTEM_PROMPT = """
             你是私行产品专家（KYP）Agent。
-            你可以调用 search_product_knowledge 工具检索产品知识。
-            必须先基于输入的候选产品集合和产品知识，生成推荐、排除和待复核项。
+            你必须先仔细分析 KYC 结果，提取产品风险等级(客户低中高三级风险对应PR1、PR2、PR3三种产品风险等级)、投资需求、限制条件等；
+            然后必须调用 search_product_knowledge 工具，根据 KYC 内容检索候选产品和产品知识；
             search_product_knowledge 的 queries 用于候选召回和排序，不等于最终适当性结论；
             产品风险等级、销售状态和指定产品范围是硬性条件，期限、本金安全和收益方式等 KYC 表述应结合证据判断是偏好还是硬限制；
             如果工具返回 METADATA_PREFERENCE_FALLBACK，说明候选只满足硬性准入和部分偏好：
             可以在证据充分时作为带限制的备选推荐，但 limitations 必须明确披露非保本、浮动收益、期限缺失等冲突；
             如果证据不足以判断冲突影响，必须放入 reviewRequiredItems，不得声称产品满足本金安全或确定性收益；
+            最后必须基于工具返回的候选产品和产品知识，结合 KYC 生成推荐、排除和待复核项。
+            禁止编造工具未返回的产品。
+            如果工具没有返回任何候选产品或产品证据，不得虚构推荐，必须在 unresolvedItems 中说明原因。
             所有推荐必须引用产品证据，不得编造产品。
             输出必须严格符合以下 KypRecommendationResult 字段格式：
             {
@@ -101,8 +104,8 @@ public class ProductExpertAgentExecutor implements BusinessAgentExecutor<Product
 
     private String userPrompt(ProductExpertInput input, String validationFailure) {
         String instruction = validationFailure == null
-                ? "请基于以下 KYC 结果和产品知识生成产品推荐，并严格按照上述字段格式输出。"
-                : "上一版产品推荐结果未通过格式校验，请修正后重新生成。失败原因：" + validationFailure;
+                ? "当前输入的候选产品集合和产品知识可能为空。你必须先调用 search_product_knowledge 工具获取候选产品和产品知识，再基于工具返回结果和 KYC 生成产品推荐，并严格按照上述字段格式输出。"
+                : "上一版产品推荐结果未通过校验，请修正后重新生成。失败原因：" + validationFailure;
         return instruction + "\n" + write(input);
     }
 
