@@ -11,11 +11,12 @@ public record AdminWorkflowResponse(
         WorkflowStatus status,
         String errorCode,
         String errorMessage,
+        Long version,
         LocalDateTime updatedAt) {
 
     public static AdminWorkflowResponse from(WorkflowState workflow) {
         return new AdminWorkflowResponse(
                 workflow.getWorkflowId(), workflow.getPersonId(), workflow.getWorkflowStatus(),
-                workflow.getErrorCode(), workflow.getErrorMessage(), workflow.getUpdatedAt());
+                workflow.getErrorCode(), workflow.getErrorMessage(), workflow.getVersion(), workflow.getUpdatedAt());
     }
 }

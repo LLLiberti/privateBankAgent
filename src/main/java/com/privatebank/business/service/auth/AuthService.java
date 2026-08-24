@@ -77,7 +77,7 @@ public class AuthService {
 
     public UserProfileResponse profile(CurrentUserPrincipal principal) {
         List<String> permissions = principal.role() == RoleName.SYSTEM_ADMIN
-                ? List.of("ADMIN_CONFIG", "ADMIN_WORKFLOW", "CUSTOMER_READ", "PRODUCT_READ")
+                ? List.of("ADMIN_CONFIG", "ADMIN_WORKFLOW", "ADMIN_WORKFLOW_DELETE", "CUSTOMER_READ", "PRODUCT_READ")
                 : List.of("CUSTOMER_READ", "DOCUMENT_UPLOAD", "WORKFLOW_CREATE", "CFS_REVIEW", "FILE_DOWNLOAD");
         long count = currentUserService.activeScopeCount(principal);
         return new UserProfileResponse(
