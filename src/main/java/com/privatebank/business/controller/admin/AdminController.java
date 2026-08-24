@@ -1,5 +1,7 @@
 package com.privatebank.business.controller.admin;
 
+import com.privatebank.business.dto.admin.AdminWorkflowDeleteRequest;
+import com.privatebank.business.dto.admin.AdminWorkflowDeleteResponse;
 import com.privatebank.business.dto.admin.AdminWorkflowResponse;
 import com.privatebank.business.dto.product.ProductCatalogResponse;
 import com.privatebank.business.dto.admin.ConfigurationCandidateRequest;
@@ -9,6 +11,7 @@ import com.privatebank.business.dto.admin.CustomerScopeResponse;
 import com.privatebank.business.dto.admin.ReplaceCustomerScopesRequest;
 import com.privatebank.business.dto.admin.ReplaceCustomerScopesResponse;
 import com.privatebank.business.service.admin.AdminService;
+import com.privatebank.business.service.admin.AdminWorkflowCleanupService;
 import com.privatebank.business.service.admin.ConfigurationRegistry;
 import com.privatebank.business.service.admin.CustomerScopeAdminService;
 import com.privatebank.business.dto.common.PageResponse;
@@ -20,12 +23,14 @@ import com.privatebank.business.enums.workflow.WorkflowStatus;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -48,6 +53,7 @@ import java.util.Map;
 public class AdminController {
 
     private final AdminService adminService;
+    private final AdminWorkflowCleanupService adminWorkflowCleanupService;
     private final ConfigurationRegistry configurationRegistry;
     private final CustomerScopeAdminService customerScopeAdminService;
     private final DocumentService documentService;
@@ -96,6 +102,15 @@ public class AdminController {
             @RequestParam(defaultValue = "1") @Min(1) int pageNo,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int pageSize) {
         return adminService.workflows(status, pageNo, pageSize);
+    }
+
+    @DeleteMapping("/workflows/{workflowId}")
+    public AdminWorkflowDeleteResponse deleteWorkflow(
+            @AuthenticationPrincipal CurrentUserPrincipal principal,
+            @PathVariable @Size(max = 64) String workflowId,
+            @RequestHeader("Idempotency-Key") @NotBlank @Size(max = 64) String idempotencyKey,
+            @Valid @RequestBody AdminWorkflowDeleteRequest request) {
+        return adminWorkflowCleanupService.delete(principal, workflowId, idempotencyKey, request);
     }
 
     @GetMapping("/products")
