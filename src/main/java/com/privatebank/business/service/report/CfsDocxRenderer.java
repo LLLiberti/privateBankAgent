@@ -29,7 +29,6 @@ import java.io.IOException;
 import java.math.BigInteger;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
-import java.util.Map;
 
 @Component
 public class CfsDocxRenderer {
@@ -41,8 +40,8 @@ public class CfsDocxRenderer {
     private static final String GRAY = "666666";
     private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss XXX");
     private static final List<String> ATTACHMENT_TITLES = List.of(
-            "家庭结构与关键关系", "企业发展与财务概况", "主要产品与服务",
-            "行业趋势与竞争格局", "客户与企业舆情", "本行服务优势与营销话术");
+            "实控人及其他关键人物详情", "公司大事记及财务分析", "公司主要产品及服务介绍",
+            "行业知识及竞争对手情况", "公司及个人舆情", "工作优势及营销话术");
 
     public byte[] render(CfsReportDocument report) {
         try (XWPFDocument document = new XWPFDocument();
@@ -53,33 +52,23 @@ public class CfsDocxRenderer {
             addCover(document, report);
             document.createParagraph().createRun().addBreak(BreakType.PAGE);
 
-            addSection(document, "一、客户、企业与行业概况", report.chapter1CustomerInfo());
-            addSection(document, "二、综合服务方案", report.chapter2ServicePlan());
-            addSection(document, "三、营销与接触策略", report.chapter3MarketingStrategy());
-            addSection(document, "四、核心营销策略摘要", report.marketingStrategy());
-            addSection(document, "五、综合风险评估", report.comprehensiveRiskAssessment());
-            addSection(document, "六、沟通指引", report.communicationGuide());
+            addSection(document, "第一章 客户信息", report.chapter1CustomerInfo(), bulletNumberingId);
+            addSection(document, "第二章 服务方案", report.chapter2ServicePlan(), bulletNumberingId);
+            addSection(document, "第三章 营销策略", report.chapter3MarketingStrategy(), bulletNumberingId);
 
-            addHeading(document, "七、专项附件", 1);
-            if (report.attachments().isEmpty()) {
-                addBody(document, "未提供。");
-            } else {
-                for (int index = 0; index < report.attachments().size(); index++) {
-                    String title = index < ATTACHMENT_TITLES.size()
-                            ? ATTACHMENT_TITLES.get(index)
-                            : "补充附件 " + (index + 1);
-                    addHeading(document, "7." + (index + 1) + " " + title, 2);
-                    addBody(document, report.attachments().get(index));
-                }
+            for (int index = 0; index < ATTACHMENT_TITLES.size(); index++) {
+                addHeading(document, "附件" + (index + 1) + " " + ATTACHMENT_TITLES.get(index), 1);
+                String body = index < report.attachments().size()
+                        ? report.attachments().get(index) : "未提供。";
+                addStructuredBody(document, body, bulletNumberingId);
             }
 
-            addListSection(document, "八、待核实事项", report.pendingVerificationItems(), bulletNumberingId);
-            addListSection(document, "九、估算数据及缺失信息说明", report.estimatedDataItems(), bulletNumberingId);
-            addEvidence(document, report, bulletNumberingId);
+            document.createParagraph().createRun().addBreak(BreakType.PAGE);
+            addDataSources(document, report.dataSources(), bulletNumberingId);
             addDisclaimer(document);
 
             document.getProperties().getCoreProperties().setTitle("客户综合金融服务方案（CFS）");
-            document.getProperties().getCoreProperties().setCreator("Private Bank Agent");
+            document.getProperties().getCoreProperties().setCreator("私人银行智能助手");
             document.write(output);
             return output.toByteArray();
         } catch (IOException exception) {
@@ -118,7 +107,7 @@ public class CfsDocxRenderer {
         footerParagraph.setAlignment(ParagraphAlignment.CENTER);
         XWPFRun footerRun = footerParagraph.createRun();
         styleRun(footerRun, 9, GRAY, false);
-        footerRun.setText("Private Bank Agent | CFS Report");
+        footerRun.setText("私人银行客户综合金融服务方案");
     }
 
     private void addCover(XWPFDocument document, CfsReportDocument report) {
@@ -128,7 +117,7 @@ public class CfsDocxRenderer {
         kicker.setSpacingAfter(240);
         XWPFRun kickerRun = kicker.createRun();
         styleRun(kickerRun, 11, BLUE, true);
-        kickerRun.setText("COMPREHENSIVE FINANCIAL SERVICE REPORT");
+        kickerRun.setText("私人银行客户综合金融服务方案");
 
         XWPFParagraph title = document.createParagraph();
         title.setStyle("Title");
@@ -149,7 +138,6 @@ public class CfsDocxRenderer {
         addCoverMetadata(document, "CFS 版本", "V" + report.cfsVersion());
         addCoverMetadata(document, "审核状态", "人工审核通过");
         addCoverMetadata(document, "生成时间", TIME_FORMAT.format(report.generatedAt()));
-        addCoverMetadata(document, "报告编号", report.cfsArtifactId());
 
         addSpacer(document, 360);
         XWPFParagraph notice = document.createParagraph();
@@ -172,46 +160,51 @@ public class CfsDocxRenderer {
         valueRun.setText(value);
     }
 
-    private void addSection(XWPFDocument document, String title, String body) {
+    private void addSection(
+            XWPFDocument document, String title, String body, BigInteger numberingId) {
         addHeading(document, title, 1);
-        addBody(document, value(body));
+        addStructuredBody(document, value(body), numberingId);
     }
 
-    private void addListSection(
-            XWPFDocument document, String title, List<String> items, BigInteger numberingId) {
-        addHeading(document, title, 1);
-        if (items.isEmpty()) {
-            addBody(document, "无。");
-            return;
-        }
-        for (String item : items) {
-            addBullet(document, item, numberingId);
-        }
-    }
-
-    private void addEvidence(XWPFDocument document, CfsReportDocument report, BigInteger numberingId) {
-        addHeading(document, "十、证据与来源引用", 1);
-        addHeading(document, "CFS 输入", 2);
-        if (report.inputArtifactRefs().isEmpty()) {
-            addBody(document, "无。");
-        } else {
-            for (Map.Entry<String, String> entry : report.inputArtifactRefs().entrySet()) {
-                addBullet(document, entry.getKey() + "：" + entry.getValue(), numberingId);
+    private void addStructuredBody(
+            XWPFDocument document, String text, BigInteger numberingId) {
+        for (String rawLine : value(text).split("\\n")) {
+            String line = rawLine.trim();
+            if (!StringUtils.hasText(line)) {
+                continue;
+            }
+            if (line.startsWith("### ")) {
+                addHeading(document, line.substring(4).trim(), 2);
+            } else if (line.startsWith("## ")) {
+                addHeading(document, line.substring(3).trim(), 2);
+            } else if (line.startsWith("- ")) {
+                addBullet(document, line.substring(2).trim(), numberingId);
+            } else {
+                addBody(document, line);
             }
         }
-        addReferenceList(document, "来源引用", report.sourceRefs(), numberingId);
-        addReferenceList(document, "产品知识证据", report.productEvidenceRefs(), numberingId);
-        addReferenceList(document, "规则引用", report.ruleRefs(), numberingId);
     }
 
-    private void addReferenceList(
-            XWPFDocument document, String title, List<String> values, BigInteger numberingId) {
-        addHeading(document, title, 2);
-        if (values.isEmpty()) {
-            addBody(document, "无。");
+    private void addDataSources(
+            XWPFDocument document,
+            List<CfsReportDocument.DataSourceItem> sources,
+            BigInteger numberingId) {
+        addHeading(document, "数据来源", 1);
+        if (sources.isEmpty()) {
+            addBody(document, "暂无可展示的数据来源，需人工补充。");
             return;
         }
-        values.forEach(value -> addBullet(document, value, numberingId));
+        for (int index = 0; index < sources.size(); index++) {
+            CfsReportDocument.DataSourceItem source = sources.get(index);
+            addHeading(document, "来源" + (index + 1) + "｜" + source.sourceType(), 2);
+            addBullet(document, "来源名称：" + source.sourceName(), numberingId);
+            addBullet(document, "定位信息：" + source.locator(), numberingId);
+            if (StringUtils.hasText(source.sourceDate())) {
+                addBullet(document, "来源日期：" + source.sourceDate(), numberingId);
+            }
+            addBullet(document, "支持内容：" + source.summary(), numberingId);
+            addBullet(document, "来源级别：" + source.sourceLevel(), numberingId);
+        }
     }
 
     private void addHeading(XWPFDocument document, String text, int level) {
@@ -268,7 +261,7 @@ public class CfsDocxRenderer {
         CTLvl level = abstractNum.addNewLvl();
         level.setIlvl(BigInteger.ZERO);
         level.addNewNumFmt().setVal(STNumberFormat.BULLET);
-        level.addNewLvlText().setVal("?");
+        level.addNewLvlText().setVal("•");
         CTPPrGeneral paragraphProperties = level.addNewPPr();
         CTInd indent = paragraphProperties.addNewInd();
         indent.setLeft(BigInteger.valueOf(720));

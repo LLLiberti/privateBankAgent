@@ -82,6 +82,14 @@ public class CfsDesignAgentExecutor implements BusinessAgentExecutor<CfsDesignIn
                 ]
               }
             }
+            最终报告严格按照“3 个章节 + 6 个附件”导出。每个章节和附件必须使用清晰的小标题、分点和换行，
+            不得把多个主题压缩为一整段；正文统一使用中文，不得直接输出 PERSON、ENTERPRISE、FAMILY、SOCIAL、
+            LOW、MEDIUM、HIGH、UNKNOWN、UNVERIFIED、PENDING_CONFIRMATION 等后端枚举值。
+            chapter3MarketingStrategy 只负责深化路径、关键窗口期、待进一步了解问题和推进动作；
+            marketingStrategy 仅作为内部简要摘要，不得照抄 chapter3MarketingStrategy；
+            communicationGuide 负责具体沟通表达，其完整可用内容必须归入附件 6“工作优势及营销话术”。
+            附件 6 只输出开场、需求探询、价值表达、异议处理和下一步邀约等可直接使用的话术，不得重复第三章的策略分析。
+            sourceRefs、productEvidenceRefs、ruleRefs 合计最多 10 项，只能引用输入中真实存在的来源，不得编造代号。
             所有数组字段都必须存在，可以为空数组；数组中的对象元素不能为 null。
             但 cfsStructure.attachments 是 3+6 的固定结构，不允许为空数组，必须恰好包含 6 个非空字符串。
             customerId、inputArtifactRefs 中的三个 ID、cfsVersion 必须有效。

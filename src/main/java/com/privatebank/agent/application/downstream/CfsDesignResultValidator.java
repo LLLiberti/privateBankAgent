@@ -12,6 +12,8 @@ import org.springframework.util.StringUtils;
 @Component
 public class CfsDesignResultValidator {
 
+    private static final int MAX_SOURCE_REFERENCES = 10;
+
     public void validate(CfsDesignResult result) {
         if (result == null) {
             throw new IllegalArgumentException("CFS生成结果为空");
@@ -41,6 +43,13 @@ public class CfsDesignResultValidator {
         requireNonNull(result.sourceRefs(), "sourceRefs");
         requireNonNull(result.productEvidenceRefs(), "productEvidenceRefs");
         requireNonNull(result.ruleRefs(), "ruleRefs");
+        int sourceReferenceCount = result.sourceRefs().size()
+                + result.productEvidenceRefs().size()
+                + result.ruleRefs().size();
+        if (sourceReferenceCount > MAX_SOURCE_REFERENCES) {
+            throw new IllegalArgumentException(
+                    "CFS数据来源合计最多 10 项，实际 " + sourceReferenceCount + " 项");
+        }
         for (int i = 0; i < result.productEvidenceRefs().size(); i++) {
             ProductKnowledgeEvidence evidence = result.productEvidenceRefs().get(i);
             if (evidence == null) {

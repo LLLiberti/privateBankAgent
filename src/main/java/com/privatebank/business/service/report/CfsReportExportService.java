@@ -4,13 +4,17 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.databind.node.MissingNode;
 import com.privatebank.business.entity.workflow.AgentArtifact;
+import com.privatebank.business.dto.customer.EvidenceResponse;
 import com.privatebank.business.entity.workflow.WorkflowState;
 import com.privatebank.business.enums.workflow.AgentType;
 import com.privatebank.business.enums.workflow.WorkflowStatus;
 import com.privatebank.business.mapper.workflow.AgentArtifactMapper;
+import com.privatebank.business.mapper.customer.CustomerDataMapper;
 import com.privatebank.business.mapper.workflow.WorkflowStateMapper;
 import com.privatebank.business.service.document.FileStorageService;
+import com.privatebank.business.service.customer.RedactionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,6 +35,8 @@ public class CfsReportExportService {
 
     private final AgentArtifactMapper artifactMapper;
     private final WorkflowStateMapper workflowMapper;
+    private final CustomerDataMapper customerDataMapper;
+    private final RedactionService redactionService;
     private final ObjectMapper objectMapper;
     private final FileStorageService fileStorageService;
     private final CfsReportDocumentFactory documentFactory;
@@ -61,9 +67,16 @@ public class CfsReportExportService {
             throw new IllegalStateException("合规结果引用的CFS与待导出Artifact不一致");
         }
 
+        JsonNode kycJson = MissingNode.getInstance();
+        String kycArtifactId = cfsJson.path("inputArtifactRefs").path("kyc").asText("");
+        if (StringUtils.hasText(kycArtifactId)) {
+            AgentArtifact kyc = requireArtifact(kycArtifactId, workflowId, AgentType.CUSTOMER_INSIGHT);
+            kycJson = json(kyc.getResult(), "KYC结果不是有效JSON");
+        }
         OffsetDateTime generatedAt = OffsetDateTime.now(ZoneId.systemDefault());
         CfsReportDocument report = documentFactory.create(
-                cfsJson, workflowId, cfsArtifactId, complianceArtifactId, generatedAt);
+                cfsJson, kycJson, this::resolveEvidence,
+                workflowId, cfsArtifactId, complianceArtifactId, generatedAt);
         String baseName = reportBaseName(report);
         List<RenderedReport> rendered = List.of(
                 new RenderedReport(Format.MARKDOWN, baseName + ".md", markdownRenderer.render(report)),
@@ -116,6 +129,17 @@ public class CfsReportExportService {
         if (workflowMapper.updateById(workflow) != 1) {
             throw new IllegalStateException("CFS report workflow failure update failed");
         }
+    }
+
+    private EvidenceResponse resolveEvidence(Long sourceId) {
+        EvidenceResponse evidence = customerDataMapper.findEvidence(sourceId);
+        if (evidence == null) {
+            return null;
+        }
+        return new EvidenceResponse(
+                evidence.sourceRef(), evidence.fileName(), evidence.sheetName(), evidence.sourceRowNumber(),
+                evidence.columnName(), evidence.cellReference(), redactionService.redact(evidence.originalText()),
+                evidence.sourceLevel(), evidence.sourceDate(), evidence.sourceLocator());
     }
 
     private WorkflowState requireWorkflow(String workflowId) {
