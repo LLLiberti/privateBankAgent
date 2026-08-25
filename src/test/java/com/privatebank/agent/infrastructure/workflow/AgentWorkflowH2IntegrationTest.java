@@ -13,6 +13,7 @@ import com.privatebank.agent.domain.event.AgentSucceededEvent;
 import com.privatebank.agent.domain.kyc.*;
 import com.privatebank.agent.infrastructure.kyc.KycCustomerDataLoader;
 import com.privatebank.business.dto.customer.CustomerSummaryResponse;
+import com.privatebank.business.dto.admin.AdminWorkflowDeleteRequest;
 import com.privatebank.business.dto.workflow.*;
 import com.privatebank.business.entity.workflow.*;
 import com.privatebank.business.enums.auth.RoleName;
@@ -21,6 +22,7 @@ import com.privatebank.business.mapper.customer.CustomerDataMapper;
 import com.privatebank.business.mapper.workflow.*;
 import com.privatebank.business.security.CurrentUserPrincipal;
 import com.privatebank.business.security.CurrentUserService;
+import com.privatebank.business.service.admin.AdminWorkflowCleanupService;
 import com.privatebank.business.service.workflow.*;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -51,6 +53,7 @@ import static org.mockito.Mockito.when;
         "spring.datasource.username=sa",
         "spring.datasource.password=",
         "spring.flyway.enabled=false",
+        "mybatis-plus.configuration.database-id=h2",
         "private-bank.graph.enabled=false"
 })
 @Import(AgentWorkflowH2IntegrationTest.EventRecorderConfiguration.class)
@@ -61,6 +64,7 @@ class AgentWorkflowH2IntegrationTest {
     private static final String MANAGER_DESCRIPTION = "客户经理补充的敏感原始描述不应进入持久化结果";
 
     @Autowired WorkflowService workflowService;
+    @Autowired AdminWorkflowCleanupService adminWorkflowCleanupService;
     @Autowired KycWorkflowExecutionService kycExecutionService;
     @Autowired AgentWorkflowStateService agentStateService;
     @Autowired WorkflowStateMapper workflowMapper;
@@ -115,6 +119,52 @@ class AgentWorkflowH2IntegrationTest {
                     assertThat(row.workflowStatus()).isEqualTo(WorkflowStatus.WAITING_INPUT);
                 });
     }
+
+    @Test
+    void administratorPhysicallyDeletesAStableCfsWorkflowAggregate() {
+        WorkflowState workflow = reportWorkflow(
+                "WF-ADMIN-DELETE", "USER-REPORT", WorkflowStatus.WAITING_INPUT);
+        workflowMapper.insert(workflow);
+        jdbcTemplate.update("""
+                INSERT INTO agent_state(
+                    agent_state_id, workflow_id, agent_type, agent_status, execution_id,
+                    retry_count, version, error_code, error_message, start_time, finish_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, CURRENT_TIMESTAMP)
+                """, "AS-ADMIN-DELETE", workflow.getWorkflowId(), AgentType.CUSTOMER_INSIGHT.name(),
+                AgentStatus.SUCCESS.name(), "EXE-ADMIN-DELETE", 0, 0L);
+        insertReportArtifact(
+                "ART-ADMIN-DELETE", workflow.getWorkflowId(), AgentType.CUSTOMER_INSIGHT,
+                null, "{}", LocalDateTime.of(2026, 8, 21, 20, 1));
+        jdbcTemplate.update("""
+                INSERT INTO workflow_review(
+                    workflow_id, reviewer_id, cfs_artifact_id, review_status,
+                    review_comments, review_round, version, review_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """, workflow.getWorkflowId(), "USER-REPORT", "ART-ADMIN-DELETE",
+                ReviewStatus.REJECTED.name(), "test cleanup", 1, 0L);
+
+        var response = adminWorkflowCleanupService.delete(
+                new CurrentUserPrincipal("ADMIN-1", "administrator", RoleName.SYSTEM_ADMIN),
+                workflow.getWorkflowId(),
+                "integration-delete-1",
+                new AdminWorkflowDeleteRequest(null, workflow.getVersion()));
+
+        assertThat(response.deleted()).isTrue();
+        assertThat(response.deletedAgentStates()).isEqualTo(1);
+        assertThat(response.deletedArtifacts()).isEqualTo(1);
+        assertThat(response.deletedReviews()).isEqualTo(1);
+        assertThat(workflowMapper.selectById(workflow.getWorkflowId())).isNull();
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM agent_state WHERE workflow_id = ?", Long.class, workflow.getWorkflowId()))
+                .isZero();
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM agent_artifact WHERE workflow_id = ?", Long.class, workflow.getWorkflowId()))
+                .isZero();
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM workflow_review WHERE workflow_id = ?", Long.class, workflow.getWorkflowId()))
+                .isZero();
+    }
+
     @MockBean KycDataMaskingService maskingService;
     @MockBean KycAgentExecutor kycExecutor;
 

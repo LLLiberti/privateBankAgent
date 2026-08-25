@@ -1,3 +1,4 @@
+DROP TABLE IF EXISTS workflow_review;
 DROP TABLE IF EXISTS agent_artifact;
 DROP TABLE IF EXISTS agent_state;
 DROP TABLE IF EXISTS workflow_state;
@@ -61,4 +62,16 @@ CREATE TABLE agent_artifact (
     storage_key VARCHAR(255),
     version INT NOT NULL,
     create_time TIMESTAMP NOT NULL
+);
+
+CREATE TABLE workflow_review (
+    workflow_id VARCHAR(64) NOT NULL,
+    reviewer_id VARCHAR(64),
+    cfs_artifact_id VARCHAR(64),
+    review_status VARCHAR(32),
+    review_comments VARCHAR(4000),
+    review_round INT NOT NULL,
+    version BIGINT NOT NULL,
+    review_time TIMESTAMP,
+    PRIMARY KEY (workflow_id, review_round)
 );
