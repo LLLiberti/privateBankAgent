@@ -7,8 +7,8 @@ spring:
     password: ICBCSDCIntern@0710
     hikari:
       maximum-pool-size: 10
-      minimum-idle: 1
-      connection-timeout: 10000
+      minimum-idle: 4
+      connection-timeout: 30000
       max-lifetime: ${PRIVATE_BANK_DB_MAX_LIFETIME_MS:240000}
       keepalive-time: ${PRIVATE_BANK_DB_KEEPALIVE_TIME_MS:60000}
       validation-timeout: ${PRIVATE_BANK_DB_VALIDATION_TIMEOUT_MS:5000}

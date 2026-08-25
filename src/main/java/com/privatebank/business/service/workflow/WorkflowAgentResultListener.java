@@ -17,7 +17,6 @@ import com.privatebank.business.mapper.workflow.AgentStateMapper;
 import com.privatebank.business.mapper.workflow.WorkflowStateMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -45,7 +44,6 @@ public class WorkflowAgentResultListener {
     private final ObjectMapper objectMapper;
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    @EventListener
     public void onAgentSucceeded(AgentSucceededEvent event) {
         switch (event.agentType()) {
             case CUSTOMER_INSIGHT -> handleKycSuccess(event);
@@ -56,7 +54,6 @@ public class WorkflowAgentResultListener {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    @EventListener
     public void onAgentFailed(AgentFailedEvent event) {
         if (event.agentType() == AgentType.CUSTOMER_INSIGHT) {
             handleKycFailure(event);
