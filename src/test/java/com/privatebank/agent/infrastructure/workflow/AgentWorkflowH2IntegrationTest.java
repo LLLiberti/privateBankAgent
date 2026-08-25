@@ -52,6 +52,7 @@ import static org.mockito.Mockito.when;
         "spring.datasource.username=sa",
         "spring.datasource.password=",
         "spring.flyway.enabled=false",
+        "mybatis-plus.configuration.database-id=h2",
         "private-bank.graph.enabled=false"
 })
 @Import(AgentWorkflowH2IntegrationTest.EventRecorderConfiguration.class)
