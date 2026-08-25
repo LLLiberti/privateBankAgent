@@ -493,6 +493,8 @@ class WorkflowServiceKycReviewTest {
     void approvesKycAndReleasesTheTwoDownstreamAgents() {
         Fixture fixture = fixture();
         WorkflowState workflow = workflow();
+        workflow.setErrorCode("STALE_ERROR");
+        workflow.setErrorMessage("stale error message");
         AgentArtifact current = kycArtifact("ART-2", 2);
         AgentState marketState = agentState(AgentType.MARKET_INSIGHT, AgentStatus.PENDING);
         AgentState productState = agentState(AgentType.PRODUCT_EXPERT, AgentStatus.PENDING);
@@ -510,6 +512,9 @@ class WorkflowServiceKycReviewTest {
         assertThat(response.workflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
         assertThat(marketState.getAgentStatus()).isEqualTo(AgentStatus.READY);
         assertThat(productState.getAgentStatus()).isEqualTo(AgentStatus.READY);
+        assertThat(workflow.getErrorCode()).isNull();
+        assertThat(workflow.getErrorMessage()).isNull();
+        assertThat(workflow.getStartTime()).isNotNull();
         ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
         verify(fixture.eventPublisher).publishEvent(eventCaptor.capture());
         assertThat(eventCaptor.getValue()).isEqualTo(new DownstreamAgentsReadyEvent(
