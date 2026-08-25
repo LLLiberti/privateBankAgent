@@ -1,6 +1,7 @@
 package com.privatebank.business.service.report;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.privatebank.business.dto.customer.EvidenceResponse;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
@@ -13,6 +14,7 @@ import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 
@@ -29,10 +31,14 @@ class CfsReportRenderersTest {
 
         assertThat(markdown)
                 .contains("# 客户综合金融服务方案（CFS）")
-                .contains("## 五、综合风险评估")
-                .contains("PENDING_VERIFICATION")
-                .contains("### 7.1 家庭结构与关键关系")
-                .contains("`SRC-1`");
+                .contains("## 第一章 客户信息")
+                .contains("## 第三章 营销策略")
+                .contains("## 附件1 实控人及其他关键人物详情")
+                .contains("## 附件6 工作优势及营销话术")
+                .contains("## 数据来源")
+                .contains("中风险", "待核实")
+                .doesNotContain("核心营销策略摘要", "专项附件", "`SRC-1`", "ART-KYC")
+                .doesNotContain("MEDIUM", "PENDING_VERIFICATION");
     }
 
     @Test
@@ -45,9 +51,12 @@ class CfsReportRenderersTest {
                     .map(XWPFParagraph::getText)
                     .reduce("", (left, right) -> left + "\n" + right);
             assertThat(text)
-                    .contains("客户综合金融服务方案")
-                    .contains("综合风险评估")
-                    .contains("待核实事项");
+                    .contains("第一章 客户信息")
+                    .contains("第三章 营销策略")
+                    .contains("附件1 实控人及其他关键人物详情")
+                    .contains("附件6 工作优势及营销话术")
+                    .contains("数据来源")
+                    .doesNotContain("专项附件", "核心营销策略摘要");
         }
     }
 
@@ -62,8 +71,67 @@ class CfsReportRenderersTest {
         try (PDDocument document = Loader.loadPDF(bytes)) {
             String text = new PDFTextStripper().getText(document);
             assertThat(document.getNumberOfPages()).isGreaterThanOrEqualTo(2);
-            assertThat(text).contains("客户综合金融服务方案").contains("综合风险评估");
+            assertThat(text).contains("第一章 客户信息")
+                    .contains("附件6 工作优势及营销话术")
+                    .contains("数据来源")
+                    .doesNotContain("核心营销策略摘要");
         }
+    }
+
+    @Test
+    void restoresAliasesAndBuildsAtMostTenConcreteDataSources() throws Exception {
+        StringBuilder productEvidence = new StringBuilder();
+        for (int index = 1; index <= 10; index++) {
+            if (!productEvidence.isEmpty()) {
+                productEvidence.append(',');
+            }
+            productEvidence.append("{\"content\":\"产品资料")
+                    .append(index).append("\",\"score\":0.9}");
+        }
+        var root = objectMapper.readTree("""
+                {
+                  "customerId":"P-1",
+                  "cfsVersion":1,
+                  "cfsStructure":{
+                    "chapter1CustomerInfo":"P-1为客户本人，PERSON维度信息完整。",
+                    "chapter2ServicePlan":"服务方案。",
+                    "chapter3MarketingStrategy":"营销策略。",
+                    "attachments":["附件1","附件2","附件3","附件4","附件5","附件6"]
+                  },
+                  "marketingStrategy":"摘要",
+                  "communicationGuide":"话术",
+                  "comprehensiveRiskAssessment":"MEDIUM",
+                  "pendingVerificationItems":[],
+                  "estimatedDataItems":[],
+                  "sourceRefs":["SRC-1"],
+                  "productEvidenceRefs":[%s],
+                  "ruleRefs":["RULE-1"],
+                  "inputArtifactRefs":{"kyc":"ART-KYC","market":"ART-MARKET","kyp":"ART-KYP"}
+                }
+                """.formatted(productEvidence));
+        var kyc = objectMapper.readTree("""
+                {
+                  "aliasMappings":{"P-1":"张三"},
+                  "evidenceReferences":{"SRC-1":42}
+                }
+                """);
+        CfsReportDocument document = new CfsReportDocumentFactory().create(
+                root, kyc, sourceId -> new EvidenceResponse(
+                        sourceId, "客户资料.xlsx", "客户信息", 8, "职业经历", "D8",
+                        "张三创办企业", "一级来源", LocalDate.of(2026, 8, 1), "客户档案"),
+                "WF-1", "ART-CFS", "ART-COMPLIANCE",
+                OffsetDateTime.parse("2026-08-21T10:15:30+08:00"));
+
+        assertThat(document.customerId()).isEqualTo("张三");
+        assertThat(document.chapter1CustomerInfo()).contains("张三", "个人维度").doesNotContain("P-1", "PERSON");
+        assertThat(document.dataSources()).hasSize(10);
+        assertThat(document.dataSources().getFirst())
+                .extracting(CfsReportDocument.DataSourceItem::sourceName,
+                        CfsReportDocument.DataSourceItem::locator,
+                        CfsReportDocument.DataSourceItem::summary)
+                .containsExactly("客户资料.xlsx", "客户信息 / 第8行 / 职业经历 / D8 / 客户档案", "张三创办企业");
+        assertThat(document.dataSources()).allSatisfy(source ->
+                assertThat(source.toString()).doesNotContain("SRC-", "ART-", "RULE-"));
     }
 
     private CfsReportDocument report() {
@@ -103,6 +171,7 @@ class CfsReportRenderersTest {
             candidates.add(Path.of(windows, "Fonts", "SimsunExtG.ttf"));
         }
         candidates.add(Path.of("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"));
+        candidates.add(Path.of("/mnt/c/Windows/Fonts/simhei.ttf"));
         return candidates.stream().filter(Files::isRegularFile).findFirst().orElse(null);
     }
 }

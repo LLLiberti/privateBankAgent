@@ -4,12 +4,18 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.privatebank.business.entity.workflow.AgentArtifact;
 import com.privatebank.business.entity.workflow.WorkflowState;
+import com.privatebank.business.dto.customer.EvidenceResponse;
 import com.privatebank.business.enums.workflow.AgentType;
 import com.privatebank.business.enums.workflow.WorkflowStatus;
 import com.privatebank.business.mapper.workflow.AgentArtifactMapper;
+import com.privatebank.business.mapper.customer.CustomerDataMapper;
 import com.privatebank.business.mapper.workflow.WorkflowStateMapper;
 import com.privatebank.business.service.document.FileStorageService;
+import com.privatebank.business.service.customer.RedactionService;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+
+import java.time.LocalDate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -24,6 +30,8 @@ class CfsReportExportServiceTest {
     void exportsAllFormatsAndWritesFileMetadataBackToCfsArtifact() throws Exception {
         AgentArtifactMapper mapper = mock(AgentArtifactMapper.class);
         WorkflowStateMapper workflowMapper = mock(WorkflowStateMapper.class);
+        CustomerDataMapper customerDataMapper = mock(CustomerDataMapper.class);
+        RedactionService redactionService = mock(RedactionService.class);
         FileStorageService storage = mock(FileStorageService.class);
         CfsMarkdownRenderer markdown = mock(CfsMarkdownRenderer.class);
         CfsDocxRenderer docx = mock(CfsDocxRenderer.class);
@@ -38,6 +46,13 @@ class CfsReportExportServiceTest {
         when(workflowMapper.updateById(workflow)).thenReturn(1);
         when(mapper.selectById("ART-CFS")).thenReturn(cfs);
         when(mapper.selectById("ART-COMPLIANCE")).thenReturn(compliance);
+        when(mapper.selectById("ART-KYC")).thenReturn(artifact(
+                "ART-KYC", AgentType.CUSTOMER_INSIGHT,
+                "{\"aliasMappings\":{\"P-1\":\"张三\"},\"evidenceReferences\":{\"SRC-1\":42}}", null));
+        when(redactionService.redact("张三创办企业")).thenReturn("张三创办企业");
+        when(customerDataMapper.findEvidence(42L)).thenReturn(new EvidenceResponse(
+                42L, "客户资料.xlsx", "客户信息", 8, "职业经历", "D8",
+                "张三创办企业", "一级来源", LocalDate.of(2026, 8, 1), "客户档案"));
         when(mapper.updateById(cfs)).thenReturn(1);
         when(markdown.render(any())).thenReturn("markdown".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         when(docx.render(any())).thenReturn(new byte[]{1, 2, 3});
@@ -47,7 +62,8 @@ class CfsReportExportServiceTest {
                         "C:/storage/" + invocation.getArgument(2, String.class),
                         "REPORT", invocation.getArgument(2, String.class)));
         CfsReportExportService service = new CfsReportExportService(
-                mapper, workflowMapper, objectMapper, storage, new CfsReportDocumentFactory(), markdown, docx, pdf);
+                mapper, workflowMapper, customerDataMapper, redactionService, objectMapper, storage,
+                new CfsReportDocumentFactory(), markdown, docx, pdf);
 
         CfsReportExportService.ExportResult result = service.export(
                 "WF-1", "ART-CFS", "ART-COMPLIANCE");
@@ -62,6 +78,11 @@ class CfsReportExportServiceTest {
                 .isEqualTo("客户概况");
         assertThat(workflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.COMPLETED);
         assertThat(workflow.getFinishTime()).isNotNull();
+        ArgumentCaptor<CfsReportDocument> reportCaptor = ArgumentCaptor.forClass(CfsReportDocument.class);
+        verify(markdown).render(reportCaptor.capture());
+        assertThat(reportCaptor.getValue().customerId()).isEqualTo("张三");
+        assertThat(reportCaptor.getValue().dataSources().getFirst().sourceName()).isEqualTo("客户资料.xlsx");
+        verify(customerDataMapper).findEvidence(42L);
         verify(mapper).updateById(cfs);
         verify(workflowMapper).updateById(workflow);
     }
@@ -70,11 +91,14 @@ class CfsReportExportServiceTest {
     void recordsFailureAndKeepsWorkflowRetryable() {
         AgentArtifactMapper mapper = mock(AgentArtifactMapper.class);
         WorkflowStateMapper workflowMapper = mock(WorkflowStateMapper.class);
+        CustomerDataMapper customerDataMapper = mock(CustomerDataMapper.class);
+        RedactionService redactionService = mock(RedactionService.class);
         WorkflowState workflow = workflow();
         when(workflowMapper.selectById("WF-1")).thenReturn(workflow);
         when(workflowMapper.updateById(workflow)).thenReturn(1);
         CfsReportExportService service = new CfsReportExportService(
-                mapper, workflowMapper, new ObjectMapper(), mock(FileStorageService.class),
+                mapper, workflowMapper, customerDataMapper, redactionService,
+                new ObjectMapper(), mock(FileStorageService.class),
                 new CfsReportDocumentFactory(), mock(CfsMarkdownRenderer.class),
                 mock(CfsDocxRenderer.class), mock(CfsPdfRenderer.class));
 
@@ -116,12 +140,12 @@ class CfsReportExportServiceTest {
                     "chapter3MarketingStrategy":"营销策略",
                     "attachments":[]
                   },
-                  "sourceRefs":[],
+                  "sourceRefs":["SRC-1"],
                   "productEvidenceRefs":[],
                   "ruleRefs":[],
                   "pendingVerificationItems":[],
                   "estimatedDataItems":[],
-                  "inputArtifactRefs":{}
+                  "inputArtifactRefs":{"kyc":"ART-KYC"}
                 }
                 """;
     }

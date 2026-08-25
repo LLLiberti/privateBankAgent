@@ -21,7 +21,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Set;
 
 @Component
@@ -34,8 +33,8 @@ public class CfsPdfRenderer {
     private static final Color GRAY = new Color(102, 102, 102);
     private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss XXX");
     private static final List<String> ATTACHMENT_TITLES = List.of(
-            "家庭结构与关键关系", "企业发展与财务概况", "主要产品与服务",
-            "行业趋势与竞争格局", "客户与企业舆情", "本行服务优势与营销话术");
+            "实控人及其他关键人物详情", "公司大事记及财务分析", "公司主要产品及服务介绍",
+            "行业知识及竞争对手情况", "公司及个人舆情", "工作优势及营销话术");
 
     private final String configuredFontPath;
 
@@ -52,29 +51,19 @@ public class CfsPdfRenderer {
             try (PdfCanvas canvas = new PdfCanvas(document, font)) {
                 addCover(canvas, report);
                 canvas.pageBreak();
-                addSection(canvas, "一、客户、企业与行业概况", report.chapter1CustomerInfo());
-                addSection(canvas, "二、综合服务方案", report.chapter2ServicePlan());
-                addSection(canvas, "三、营销与接触策略", report.chapter3MarketingStrategy());
-                addSection(canvas, "四、核心营销策略摘要", report.marketingStrategy());
-                addSection(canvas, "五、综合风险评估", report.comprehensiveRiskAssessment());
-                addSection(canvas, "六、沟通指引", report.communicationGuide());
+                addSection(canvas, "第一章 客户信息", report.chapter1CustomerInfo());
+                addSection(canvas, "第二章 服务方案", report.chapter2ServicePlan());
+                addSection(canvas, "第三章 营销策略", report.chapter3MarketingStrategy());
 
-                canvas.heading("七、专项附件", 16, BLUE);
-                if (report.attachments().isEmpty()) {
-                    canvas.paragraph("未提供。", 11, BODY, 0, 12);
-                } else {
-                    for (int index = 0; index < report.attachments().size(); index++) {
-                        String title = index < ATTACHMENT_TITLES.size()
-                                ? ATTACHMENT_TITLES.get(index)
-                                : "补充附件 " + (index + 1);
-                        canvas.heading("7." + (index + 1) + " " + title, 13, NAVY);
-                        canvas.paragraph(report.attachments().get(index), 11, BODY, 18, 12);
-                    }
+                for (int index = 0; index < ATTACHMENT_TITLES.size(); index++) {
+                    canvas.heading("附件" + (index + 1) + " " + ATTACHMENT_TITLES.get(index), 16, BLUE);
+                    String body = index < report.attachments().size()
+                            ? report.attachments().get(index) : "未提供。";
+                    addStructuredBody(canvas, body);
                 }
 
-                addListSection(canvas, "八、待核实事项", report.pendingVerificationItems());
-                addListSection(canvas, "九、估算数据及缺失信息说明", report.estimatedDataItems());
-                addEvidence(canvas, report);
+                canvas.pageBreak();
+                addDataSources(canvas, report.dataSources());
                 canvas.spacer(8);
                 canvas.paragraph(
                         "重要提示：涉及估算、待核实或声誉风险的信息，须在对客使用前完成必要的人工复核。",
@@ -82,7 +71,7 @@ public class CfsPdfRenderer {
             }
             addPageNumbers(document, font);
             document.getDocumentInformation().setTitle("客户综合金融服务方案（CFS）");
-            document.getDocumentInformation().setAuthor("Private Bank Agent");
+            document.getDocumentInformation().setAuthor("私人银行智能助手");
             document.save(output);
             return output.toByteArray();
         } catch (IOException | IllegalArgumentException exception) {
@@ -93,14 +82,13 @@ public class CfsPdfRenderer {
 
     private void addCover(PdfCanvas canvas, CfsReportDocument report) throws IOException {
         canvas.spacer(88);
-        canvas.centered("COMPREHENSIVE FINANCIAL SERVICE REPORT", 10, BLUE, 26);
+        canvas.centered("私人银行客户综合金融服务方案", 10, BLUE, 26);
         canvas.centered("客户综合金融服务方案", 28, NAVY, 12);
         canvas.centered("CFS 3+6 专业分析报告", 14, BLUE, 48);
         canvas.centered("客户标识：" + value(report.customerId()), 11, BODY, 10);
         canvas.centered("CFS 版本：V" + report.cfsVersion(), 11, BODY, 10);
         canvas.centered("审核状态：人工审核通过", 11, BODY, 10);
         canvas.centered("生成时间：" + TIME_FORMAT.format(report.generatedAt()), 11, BODY, 10);
-        canvas.centered("报告编号：" + report.cfsArtifactId(), 10, GRAY, 44);
         canvas.centered(
                 "本报告由系统根据已通过合规检查的 CFS 分析结果自动生成，仅供内部授权人员使用。",
                 9, GRAY, 0);
@@ -108,43 +96,44 @@ public class CfsPdfRenderer {
 
     private void addSection(PdfCanvas canvas, String title, String body) throws IOException {
         canvas.heading(title, 16, BLUE);
-        canvas.paragraph(value(body), 11, BODY, 18, 12);
+        addStructuredBody(canvas, value(body));
     }
 
-    private void addListSection(PdfCanvas canvas, String title, List<String> items) throws IOException {
-        canvas.heading(title, 16, BLUE);
-        if (items.isEmpty()) {
-            canvas.paragraph("无。", 11, BODY, 0, 12);
-            return;
-        }
-        for (String item : items) {
-            canvas.bullet(item);
-        }
-    }
-
-    private void addEvidence(PdfCanvas canvas, CfsReportDocument report) throws IOException {
-        canvas.heading("十、证据与来源引用", 16, BLUE);
-        canvas.heading("CFS 输入", 13, NAVY);
-        if (report.inputArtifactRefs().isEmpty()) {
-            canvas.paragraph("无。", 11, BODY, 0, 10);
-        } else {
-            for (Map.Entry<String, String> entry : report.inputArtifactRefs().entrySet()) {
-                canvas.bullet(entry.getKey() + "：" + entry.getValue());
+    private void addStructuredBody(PdfCanvas canvas, String text) throws IOException {
+        for (String rawLine : value(text).split("\\n")) {
+            String line = rawLine.trim();
+            if (!StringUtils.hasText(line)) {
+                continue;
+            }
+            if (line.startsWith("### ")) {
+                canvas.heading(line.substring(4).trim(), 13, NAVY);
+            } else if (line.startsWith("## ")) {
+                canvas.heading(line.substring(3).trim(), 13, NAVY);
+            } else if (line.startsWith("- ")) {
+                canvas.bullet(line.substring(2).trim());
+            } else {
+                canvas.paragraph(line, 11, BODY, 18, 12);
             }
         }
-        addReferenceList(canvas, "来源引用", report.sourceRefs());
-        addReferenceList(canvas, "产品知识证据", report.productEvidenceRefs());
-        addReferenceList(canvas, "规则引用", report.ruleRefs());
     }
 
-    private void addReferenceList(PdfCanvas canvas, String title, List<String> items) throws IOException {
-        canvas.heading(title, 13, NAVY);
-        if (items.isEmpty()) {
-            canvas.paragraph("无。", 11, BODY, 0, 10);
+    private void addDataSources(
+            PdfCanvas canvas, List<CfsReportDocument.DataSourceItem> sources) throws IOException {
+        canvas.heading("数据来源", 16, BLUE);
+        if (sources.isEmpty()) {
+            canvas.paragraph("暂无可展示的数据来源，需人工补充。", 11, BODY, 0, 12);
             return;
         }
-        for (String item : items) {
-            canvas.bullet(item);
+        for (int index = 0; index < sources.size(); index++) {
+            CfsReportDocument.DataSourceItem source = sources.get(index);
+            canvas.heading("来源" + (index + 1) + "｜" + source.sourceType(), 13, NAVY);
+            canvas.bullet("来源名称：" + source.sourceName());
+            canvas.bullet("定位信息：" + source.locator());
+            if (StringUtils.hasText(source.sourceDate())) {
+                canvas.bullet("来源日期：" + source.sourceDate());
+            }
+            canvas.bullet("支持内容：" + source.summary());
+            canvas.bullet("来源级别：" + source.sourceLevel());
         }
     }
 
@@ -154,7 +143,7 @@ public class CfsPdfRenderer {
             PDPage page = document.getPage(index);
             try (PDPageContentStream content = new PDPageContentStream(
                     document, page, PDPageContentStream.AppendMode.APPEND, true, true)) {
-                String footer = "Private Bank Agent | CFS Report    " + (index + 1) + " / " + total;
+                String footer = "私人银行客户综合金融服务方案    " + (index + 1) + " / " + total;
                 float width = textWidth(font, footer, 8);
                 font.writeText(content, footer, (PAGE_SIZE.getWidth() - width) / 2, 30, 8, GRAY);
             }
@@ -177,6 +166,7 @@ public class CfsPdfRenderer {
             candidates.add(Path.of(windows, "Fonts", "arial.ttf"));
         }
         candidates.add(Path.of("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"));
+        candidates.add(Path.of("/mnt/c/Windows/Fonts/simhei.ttf"));
         candidates.add(Path.of("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"));
         List<Path> paths = candidates.stream().filter(Files::isRegularFile).toList();
         if (paths.isEmpty()) {
@@ -363,7 +353,7 @@ public class CfsPdfRenderer {
             for (String line : lines) {
                 ensure(lineHeight);
                 if (first) {
-                    writeText("-", LEFT, y, size, BODY);
+                    writeText("•", LEFT, y, size, BODY);
                 }
                 writeText(line, LEFT + indent, y, size, BODY);
                 y -= lineHeight;

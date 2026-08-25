@@ -39,7 +39,9 @@ class CfsDesignAgentExecutorTest {
                 .contains("实控人及其他关键人物详情", "公司大事记及财务分析")
                 .contains("公司主要产品及服务介绍", "行业知识及竞争对手情况")
                 .contains("公司及个人舆情", "工作优势及营销话术")
-                .contains("恰好包含 6 个非空字符串");
+                .contains("恰好包含 6 个非空字符串")
+                .contains("小标题、分点和换行", "不得重复第三章的策略分析")
+                .contains("合计最多 10 项");
     }
 
     private CfsDesignAgentExecutor executor(StructuredAgentRuntime runtime) {
