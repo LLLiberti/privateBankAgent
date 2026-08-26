@@ -28,6 +28,16 @@ def required_environment(name: str) -> str:
     return value
 
 
+def create_elasticsearch_client(url: str, api_key: str) -> Elasticsearch:
+    return Elasticsearch(
+        url,
+        api_key=api_key,
+        verify_certs=False,
+        ssl_show_warn=False,
+        request_timeout=60,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Index one product document into Elasticsearch.")
     parser.add_argument("--document-id", required=True)
@@ -46,7 +56,6 @@ def main() -> int:
     load_dotenv(MODULE_ROOT / ".env")
     url = required_environment("ELASTICSEARCH_URL")
     api_key = required_environment("ELASTICSEARCH_API_KEY")
-    fingerprint = required_environment("ELASTICSEARCH_CA_FINGERPRINT")
     index_name = required_environment("ELASTICSEARCH_INDEX")
     chunks_path = args.chunks_root / args.document_id / "chunks.json"
     if not chunks_path.is_file():
@@ -54,12 +63,7 @@ def main() -> int:
 
     try:
         prepared = prepare_elasticsearch_index(chunks_path, args.document_id)
-        client = Elasticsearch(
-            url,
-            api_key=api_key,
-            ssl_assert_fingerprint=fingerprint,
-            request_timeout=60,
-        )
+        client = create_elasticsearch_client(url, api_key)
         service = ElasticsearchIndexService(client, index_name)
         manifest = ElasticsearchIndexPipeline(service, args.output_root, log=print).run(
             prepared

@@ -13,10 +13,20 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
 
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509ExtendedTrustManager;
+import java.net.Socket;
+import java.net.http.HttpClient;
+import java.security.GeneralSecurityException;
+import java.security.SecureRandom;
+import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -44,6 +54,7 @@ public class ProductKnowledgeSearchService {
     private static final Set<String> GENERIC_PRODUCT_TERMS = Set.of("产品", "理财", "理财产品", "产品知识");
     private static final Set<String> SUITABILITY_TERMS = Set.of("保守型", "稳健型", "平衡型", "成长型", "进取型");
     private static final Pattern YEAR_RANGE_PATTERN = Pattern.compile("^(\\d+)\\s*[-~—至到]\\s*(\\d+)\\s*年(?:期)?$");
+    private static final HttpClient INSECURE_ELASTICSEARCH_HTTP_CLIENT = createInsecureElasticsearchHttpClient();
 
     private final ProductMetadataMapper productMetadataMapper;
     private final ProductDocumentIdResolver documentIdResolver;
@@ -319,6 +330,7 @@ public class ProductKnowledgeSearchService {
         try {
             RestClient client = RestClient.builder()
                     .baseUrl(normalizeBase(esUris))
+                    .requestFactory(new JdkClientHttpRequestFactory(INSECURE_ELASTICSEARCH_HTTP_CLIENT))
                     .defaultHeaders(headers -> {
                         if (StringUtils.hasText(esUsername) && StringUtils.hasText(esPassword)) {
                             headers.setBasicAuth(esUsername, esPassword);
@@ -332,15 +344,30 @@ public class ProductKnowledgeSearchService {
                             "bool", Map.of(
                                     "must", List.of(Map.of("match", Map.of("content", query))),
                                     "filter", List.of(Map.of("terms", Map.of("document_id", documentIds))))));
+            int issueCount = issues.size();
+            long startedNanos = System.nanoTime();
             String response = client.post()
                     .uri("/" + properties.elasticsearch().index() + "/_search")
                     .body(body)
                     .retrieve()
                     .body(String.class);
-            int issueCount = issues.size();
             List<ProductKnowledgeEvidence> evidence = parseEsResponse(
                     response, productIdByDocumentId, affectedProductIds, issues);
-            if (evidence.isEmpty() && issues.size() == issueCount) {
+            boolean responseParsed = issues.size() == issueCount;
+            if (responseParsed) {
+                log.info(
+                        "elasticsearchProductKnowledgeSearchSuccess endpoint={} index={} durationMs={} "
+                                + "query={} documentIds={} evidenceCount={} productIds={} chunkIds={}",
+                        normalizeBase(esUris),
+                        properties.elasticsearch().index(),
+                        elapsedMillis(startedNanos),
+                        query,
+                        documentIds,
+                        evidence.size(),
+                        evidenceProductIds(evidence),
+                        evidenceChunkIds(evidence));
+            }
+            if (evidence.isEmpty() && responseParsed) {
                 issues.add(issue("ELASTICSEARCH", "ELASTICSEARCH_NO_HITS",
                         "Elasticsearch 在合规产品范围内没有召回证据", affectedProductIds));
             }
@@ -387,15 +414,30 @@ public class ProductKnowledgeSearchService {
                     "with_payload", true,
                     "filter", Map.of("must", List.of(
                             Map.of("key", "document_id", "match", Map.of("any", documentIds)))));
+            int issueCount = issues.size();
+            long startedNanos = System.nanoTime();
             String response = client.post()
                     .uri("/collections/" + qdrant.collectionName() + "/points/search")
                     .body(body)
                     .retrieve()
                     .body(String.class);
-            int issueCount = issues.size();
             List<ProductKnowledgeEvidence> evidence = parseQdrantResponse(
                     response, productIdByDocumentId, affectedProductIds, issues);
-            if (evidence.isEmpty() && issues.size() == issueCount) {
+            boolean responseParsed = issues.size() == issueCount;
+            if (responseParsed) {
+                log.info(
+                        "qdrantProductKnowledgeSearchSuccess endpoint={} collection={} durationMs={} "
+                                + "query={} documentIds={} evidenceCount={} productIds={} chunkIds={}",
+                        "http://" + qdrant.host() + ":" + qdrant.port(),
+                        qdrant.collectionName(),
+                        elapsedMillis(startedNanos),
+                        query,
+                        documentIds,
+                        evidence.size(),
+                        evidenceProductIds(evidence),
+                        evidenceChunkIds(evidence));
+            }
+            if (evidence.isEmpty() && responseParsed) {
                 issues.add(issue("QDRANT", "QDRANT_NO_HITS",
                         "Qdrant 在合规产品范围内没有召回证据", affectedProductIds));
             }
@@ -648,6 +690,79 @@ public class ProductKnowledgeSearchService {
 
     private String normalizeBase(String value) {
         return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
+    }
+
+    private long elapsedMillis(long startedNanos) {
+        return (System.nanoTime() - startedNanos) / 1_000_000;
+    }
+
+    private List<String> evidenceProductIds(List<ProductKnowledgeEvidence> evidence) {
+        return evidence.stream()
+                .map(ProductKnowledgeEvidence::productId)
+                .filter(StringUtils::hasText)
+                .distinct()
+                .toList();
+    }
+
+    private List<String> evidenceChunkIds(List<ProductKnowledgeEvidence> evidence) {
+        return evidence.stream()
+                .map(ProductKnowledgeEvidence::chunkId)
+                .filter(StringUtils::hasText)
+                .distinct()
+                .toList();
+    }
+
+    private static HttpClient createInsecureElasticsearchHttpClient() {
+        try {
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(
+                    null,
+                    new TrustManager[]{new InsecureElasticsearchTrustManager()},
+                    new SecureRandom());
+            return HttpClient.newBuilder()
+                    .sslContext(sslContext)
+                    .build();
+        } catch (GeneralSecurityException exception) {
+            throw new IllegalStateException("Unable to create insecure Elasticsearch HTTP client", exception);
+        }
+    }
+
+    /**
+     * Elasticsearch in this temporary environment uses an untrusted certificate
+     * whose SAN does not contain the public endpoint. The extended no-op trust
+     * manager deliberately skips both certificate-chain and endpoint identity
+     * validation for Elasticsearch requests only.
+     */
+    private static final class InsecureElasticsearchTrustManager extends X509ExtendedTrustManager {
+
+        @Override
+        public void checkClientTrusted(X509Certificate[] chain, String authType) {
+        }
+
+        @Override
+        public void checkServerTrusted(X509Certificate[] chain, String authType) {
+        }
+
+        @Override
+        public void checkClientTrusted(X509Certificate[] chain, String authType, Socket socket) {
+        }
+
+        @Override
+        public void checkServerTrusted(X509Certificate[] chain, String authType, Socket socket) {
+        }
+
+        @Override
+        public void checkClientTrusted(X509Certificate[] chain, String authType, SSLEngine engine) {
+        }
+
+        @Override
+        public void checkServerTrusted(X509Certificate[] chain, String authType, SSLEngine engine) {
+        }
+
+        @Override
+        public X509Certificate[] getAcceptedIssuers() {
+            return new X509Certificate[0];
+        }
     }
 
     private record MetadataProductMatch(
