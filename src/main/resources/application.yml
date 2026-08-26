@@ -54,9 +54,9 @@ management:
 private-bank:
   agent-runtime:
     deepseek:
-      base-url: https://llm-n44hvjgqqs2n2i0l.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
-      api-key: ${DASHSCOPE_API_KEY:}
-      model: qwen-plus
+      base-url: ${PRIVATE_BANK_DEEPSEEK_BASE_URL:https://api.deepseek.com/v1}
+      api-key: ${PRIVATE_BANK_DEEPSEEK_API_KEY:}
+      model: ${PRIVATE_BANK_DEEPSEEK_CHAT_MODEL:deepseek-v4-flash}
       temperature: 0
     max-model-retries: 2
     max-iterations: 4

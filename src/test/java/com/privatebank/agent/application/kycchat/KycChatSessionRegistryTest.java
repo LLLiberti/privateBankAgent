@@ -89,6 +89,21 @@ class KycChatSessionRegistryTest {
                 .hasMessageContaining("不匹配");
     }
 
+    @Test
+    void keepsMaskedAssistantAnswerInModelHistory() {
+        KycChatSessionRegistry.OpenResult first = open(null, "IDEMP-1", "请解释结论");
+        registry.delta(first.pointer(), "P-");
+        registry.delta(first.pointer(), "1的结论");
+        registry.complete(first.pointer());
+
+        KycChatSessionRegistry.OpenResult second = open(
+                first.command().sessionId(), "IDEMP-2", "继续说明");
+
+        assertThat(second.command().history())
+                .extracting(KycChatMessage::content)
+                .containsExactly("请解释结论", "P-1的结论");
+    }
+
     private KycChatSessionRegistry.OpenResult open(
             String sessionId, String idempotencyKey, String message) {
         return open(sessionId, idempotencyKey, null, message);

@@ -1,7 +1,9 @@
 package com.privatebank.agent.application.kycchat;
 
+import com.privatebank.agent.application.kyc.KycAliasTextRestorer;
 import com.privatebank.business.common.exception.BusinessException;
 import com.privatebank.business.common.exception.ErrorCode;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
@@ -34,14 +36,26 @@ public class KycChatSessionRegistry {
     private final Duration sessionTtl;
     private final long emitterTimeoutMillis;
     private final int maxAnswerCodePoints;
+    private final KycAliasTextRestorer aliasTextRestorer;
 
+    @Autowired
     public KycChatSessionRegistry(
             @Value("${private-bank.kyc-chat.session-ttl-minutes:30}") long sessionTtlMinutes,
             @Value("${private-bank.kyc-chat.emitter-timeout-seconds:150}") long emitterTimeoutSeconds,
-            @Value("${private-bank.kyc-chat.max-answer-code-points:8000}") int maxAnswerCodePoints) {
+            @Value("${private-bank.kyc-chat.max-answer-code-points:8000}") int maxAnswerCodePoints,
+            KycAliasTextRestorer aliasTextRestorer) {
         this.sessionTtl = Duration.ofMinutes(sessionTtlMinutes);
         this.emitterTimeoutMillis = Duration.ofSeconds(emitterTimeoutSeconds).toMillis();
         this.maxAnswerCodePoints = maxAnswerCodePoints;
+        this.aliasTextRestorer = aliasTextRestorer;
+    }
+
+    public KycChatSessionRegistry(
+            long sessionTtlMinutes,
+            long emitterTimeoutSeconds,
+            int maxAnswerCodePoints) {
+        this(sessionTtlMinutes, emitterTimeoutSeconds, maxAnswerCodePoints,
+                new KycAliasTextRestorer());
     }
 
     public OpenResult open(
@@ -100,7 +114,11 @@ public class KycChatSessionRegistry {
             session.lastAccessAt = Instant.now();
 
             String turnId = "TURN-" + UUID.randomUUID();
-            ChatTurn turn = new ChatTurn(turnId, fingerprint(rawMessage), prepared.maskedMessage());
+            ChatTurn turn = new ChatTurn(
+                    turnId,
+                    fingerprint(rawMessage),
+                    prepared.maskedMessage(),
+                    aliasTextRestorer.streaming(prepared.aliasMappings()));
             session.turns.add(turn);
             session.activeTurn = turn;
             TurnPointer pointer = new TurnPointer(session, turn, turnKey);
@@ -125,7 +143,7 @@ public class KycChatSessionRegistry {
                     "workflowId", context.workflowId(),
                     "personId", context.personId(),
                     "kycArtifactId", context.kycArtifactId(),
-                    "aliasMappings", Map.copyOf(session.aliasMappings),
+                    "displayRestorationApplied", true,
                     "expiresInSeconds", sessionTtl.toSeconds()));
             return new OpenResult(emitter, command, pointer);
         }
@@ -137,11 +155,12 @@ public class KycChatSessionRegistry {
         }
         ChatTurn turn = pointer.turn();
         String accepted;
+        String displayDelta;
         synchronized (turn) {
             if (turn.terminal() || turn.truncated) {
                 return;
             }
-            int current = turn.answer.codePointCount(0, turn.answer.length());
+            int current = turn.maskedAnswer.codePointCount(0, turn.maskedAnswer.length());
             int remaining = maxAnswerCodePoints - current;
             if (remaining <= 0) {
                 turn.truncated = true;
@@ -154,10 +173,11 @@ public class KycChatSessionRegistry {
             } else {
                 accepted = delta;
             }
-            turn.answer.append(accepted);
+            turn.maskedAnswer.append(accepted);
+            displayDelta = turn.displayRestorer.accept(accepted);
         }
-        if (StringUtils.hasLength(accepted)) {
-            publish(turn, "delta", mapOf("turnId", turn.turnId, "content", accepted));
+        if (StringUtils.hasLength(displayDelta)) {
+            publish(turn, "delta", mapOf("turnId", turn.turnId, "content", displayDelta));
         }
     }
 
@@ -165,13 +185,15 @@ public class KycChatSessionRegistry {
         ChatSession session = pointer.session();
         ChatTurn turn = pointer.turn();
         String answer;
+        String displayTail;
         String finishReason;
         synchronized (session) {
             synchronized (turn) {
                 if (turn.terminal()) {
                     return;
                 }
-                answer = turn.answer.toString();
+                answer = turn.maskedAnswer.toString();
+                displayTail = turn.displayRestorer.finish();
                 if (!StringUtils.hasText(answer)) {
                     turn.status = TurnStatus.FAILED;
                     finishReason = null;
@@ -192,6 +214,9 @@ public class KycChatSessionRegistry {
             fail(pointer, "EMPTY_RESPONSE", "模型未生成可展示内容", true);
             return;
         }
+        if (StringUtils.hasLength(displayTail)) {
+            publish(turn, "delta", mapOf("turnId", turn.turnId, "content", displayTail));
+        }
         publish(turn, "done", mapOf("turnId", turn.turnId, "finishReason", finishReason));
         completeEmitter(turn);
     }
@@ -199,6 +224,7 @@ public class KycChatSessionRegistry {
     public void fail(TurnPointer pointer, String code, String message, boolean retryable) {
         ChatSession session = pointer.session();
         ChatTurn turn = pointer.turn();
+        String displayTail;
         synchronized (session) {
             synchronized (turn) {
                 if (turn.status == TurnStatus.COMPLETED || turn.errorPublished) {
@@ -206,11 +232,15 @@ public class KycChatSessionRegistry {
                 }
                 turn.status = TurnStatus.FAILED;
                 turn.errorPublished = true;
+                displayTail = turn.displayRestorer.finish();
                 if (session.activeTurn == turn) {
                     session.activeTurn = null;
                 }
                 session.lastAccessAt = Instant.now();
             }
+        }
+        if (StringUtils.hasLength(displayTail)) {
+            publish(turn, "delta", mapOf("turnId", turn.turnId, "content", displayTail));
         }
         publish(turn, "error", mapOf(
                 "turnId", turn.turnId,
@@ -466,7 +496,8 @@ public class KycChatSessionRegistry {
         private final String turnId;
         private final String messageFingerprint;
         private final String maskedMessage;
-        private final StringBuilder answer = new StringBuilder();
+        private final StringBuilder maskedAnswer = new StringBuilder();
+        private final KycAliasTextRestorer.StreamingRestorer displayRestorer;
         private final List<ChatEvent> events = new ArrayList<>();
         private volatile TurnStatus status = TurnStatus.STREAMING;
         private long nextSequence;
@@ -474,10 +505,15 @@ public class KycChatSessionRegistry {
         private boolean errorPublished;
         private SseEmitter emitter;
 
-        private ChatTurn(String turnId, String messageFingerprint, String maskedMessage) {
+        private ChatTurn(
+                String turnId,
+                String messageFingerprint,
+                String maskedMessage,
+                KycAliasTextRestorer.StreamingRestorer displayRestorer) {
             this.turnId = turnId;
             this.messageFingerprint = messageFingerprint;
             this.maskedMessage = maskedMessage;
+            this.displayRestorer = displayRestorer;
         }
 
         private boolean terminal() {
