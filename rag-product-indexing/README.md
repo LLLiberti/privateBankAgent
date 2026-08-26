@@ -77,7 +77,7 @@ python -m pip install -r requirements.txt
 *   `openai`：调用百炼 OpenAI-compatible Embedding API
 *   `python-dotenv`：从本地 `.env` 加载 API 配置
 *   `qdrant-client`：通过 REST 创建/校验 collection 并写入向量 points
-*   `elasticsearch`：使用 API Key 与 CA fingerprint 写入 BM25 文本索引
+*   `elasticsearch`：使用 API Key 写入 BM25 文本索引，并跳过 TLS 证书与主机名校验
 *   `pytest`：离线测试
 
 Windows 版 `docling-parse` 的原生后端可能无法从含中文字符的 `site-packages` 路径加载资源。仓库路径包含中文时，建议使用纯 ASCII 路径的虚拟环境，例如：
@@ -351,11 +351,10 @@ Elasticsearch 文本索引读取 `chunks.json` 的 `content` 与来源 metadata�
 ```
 ELASTICSEARCH_URL=
 ELASTICSEARCH_API_KEY=
-ELASTICSEARCH_CA_FINGERPRINT=
 ELASTICSEARCH_INDEX=private-bank-product-chunks-v1
 ```
 
-索引名必须以 `private-bank-` 开头。连接使用 API Key 与 SHA-256 CA fingerprint，不关闭 TLS 证书校验。运行单份文档：
+索引名必须以 `private-bank-` 开头。连接使用 API Key，并跳过 TLS 证书与主机名校验。运行单份文档：
 
 ```
 python scripts/index_product_elasticsearch.py --document-id D000001

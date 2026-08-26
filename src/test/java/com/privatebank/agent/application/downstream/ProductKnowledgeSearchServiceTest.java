@@ -13,7 +13,10 @@ import com.sun.net.httpserver.HttpServer;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.io.IOException;
@@ -30,6 +33,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+@ExtendWith(OutputCaptureExtension.class)
 class ProductKnowledgeSearchServiceTest {
 
     @BeforeAll
@@ -172,7 +176,7 @@ class ProductKnowledgeSearchServiceTest {
     }
 
     @Test
-    void recallsEsAndQdrantEvidenceInsideDocumentWhitelist() throws Exception {
+    void recallsEsAndQdrantEvidenceInsideDocumentWhitelist(CapturedOutput output) throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         AtomicReference<String> embeddingRequest = new AtomicReference<>();
         AtomicReference<String> qdrantRequest = new AtomicReference<>();
@@ -226,6 +230,17 @@ class ProductKnowledgeSearchServiceTest {
             assertThat(result.retrievalIssues()).isEmpty();
             assertThat(embeddingRequest.get()).contains("稳健型 固收类", "text-embedding-v4");
             assertThat(qdrantRequest.get()).contains("\"any\":[\"D-1\"]");
+            assertThat(output)
+                    .contains(
+                            "elasticsearchProductKnowledgeSearchSuccess",
+                            "endpoint=http://127.0.0.1:" + port,
+                            "index=chunks",
+                            "evidenceCount=1",
+                            "productIds=[P-1]",
+                            "chunkIds=[C-ES]",
+                            "qdrantProductKnowledgeSearchSuccess",
+                            "collection=chunks",
+                            "chunkIds=[C-Q]");
         } finally {
             server.stop(0);
         }
