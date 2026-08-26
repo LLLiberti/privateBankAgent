@@ -23,5 +23,15 @@ public record CfsReportDocument(
         List<String> sourceRefs,
         List<String> productEvidenceRefs,
         List<String> ruleRefs,
-        Map<String, String> inputArtifactRefs) {
+        Map<String, String> inputArtifactRefs,
+        List<DataSourceItem> dataSources) {
+
+    public record DataSourceItem(
+            String sourceType,
+            String sourceName,
+            String locator,
+            String sourceDate,
+            String summary,
+            String sourceLevel) {
+    }
 }

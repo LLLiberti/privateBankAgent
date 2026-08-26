@@ -40,6 +40,7 @@ import org.springframework.test.context.jdbc.Sql;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -52,6 +53,7 @@ import static org.mockito.Mockito.when;
         "spring.datasource.username=sa",
         "spring.datasource.password=",
         "spring.flyway.enabled=false",
+        "mybatis-plus.configuration.database-id=h2",
         "private-bank.graph.enabled=false"
 })
 @Import(AgentWorkflowH2IntegrationTest.EventRecorderConfiguration.class)
@@ -184,8 +186,7 @@ class AgentWorkflowH2IntegrationTest {
         kycExecutionService.execute(created.workflowId());
         AgentArtifact firstKyc = latest(created.workflowId(), AgentType.CUSTOMER_INSIGHT);
         assertKyc(firstKyc, 1);
-        assertThat(workflowMapper.selectById(created.workflowId()).getWorkflowStatus())
-                .isEqualTo(WorkflowStatus.WAITING_INPUT);
+        awaitWorkflowStatus(created.workflowId(), WorkflowStatus.WAITING_INPUT);
 
         workflowService.provideInput(manager, created.workflowId(), "IDEMPOTENCY-2",
                 new WorkflowInputRequest(WorkflowInputRequest.Action.SUPPLEMENT, firstKyc.getArtifactId(),
@@ -203,6 +204,7 @@ class AgentWorkflowH2IntegrationTest {
         assertThat(secondKyc.getResult()).doesNotContain(MANAGER_DESCRIPTION);
         verify(maskingService).mask(any(KycCustomerData.class),
                 eq(new KycRuntimeSupplement(null, List.of("待确认的客户经理信号"))));
+        awaitWorkflowStatus(created.workflowId(), WorkflowStatus.WAITING_INPUT);
 
         workflowService.provideInput(manager, created.workflowId(), "IDEMPOTENCY-3",
                 new WorkflowInputRequest(WorkflowInputRequest.Action.CONTINUE, secondKyc.getArtifactId(), null, null));
@@ -216,23 +218,20 @@ class AgentWorkflowH2IntegrationTest {
         AgentExecutionClaim product = agentStateService.claim(created.workflowId(), AgentType.PRODUCT_EXPERT).orElseThrow();
         agentStateService.complete(product, "{\"productVersion\":\"P-1\"}", null);
 
-        assertThat(state(created.workflowId(), AgentType.SOLUTION_DESIGN).getAgentStatus())
-                .isEqualTo(AgentStatus.READY);
+        awaitAgentStatus(created.workflowId(), AgentType.SOLUTION_DESIGN, AgentStatus.READY);
         AgentExecutionClaim cfs = agentStateService.claim(created.workflowId(), AgentType.SOLUTION_DESIGN).orElseThrow();
         agentStateService.complete(cfs, json(Map.of("cfsVersion", "CFS-1",
                 "inputArtifactIds", List.of(secondKyc.getArtifactId()))), null);
         AgentArtifact cfsArtifact = latest(created.workflowId(), AgentType.SOLUTION_DESIGN);
 
-        assertThat(state(created.workflowId(), AgentType.COMPLIANCE_CHECK).getAgentStatus())
-                .isEqualTo(AgentStatus.READY);
+        awaitAgentStatus(created.workflowId(), AgentType.COMPLIANCE_CHECK, AgentStatus.READY);
         AgentExecutionClaim compliance = agentStateService.claim(
                 created.workflowId(), AgentType.COMPLIANCE_CHECK).orElseThrow();
         agentStateService.complete(compliance, json(Map.of(
                 "cfsArtifactId", cfsArtifact.getArtifactId(),
                 "cfsArtifactRef", cfsArtifact.getArtifactId())), "PASS");
 
-        assertThat(workflowMapper.selectById(created.workflowId()).getWorkflowStatus())
-                .isEqualTo(WorkflowStatus.WAITING_REVIEW);
+        awaitWorkflowStatus(created.workflowId(), WorkflowStatus.WAITING_REVIEW);
         assertThat(artifactMapper.selectList(Wrappers.<AgentArtifact>lambdaQuery()
                 .eq(AgentArtifact::getWorkflowId, created.workflowId()))).hasSize(6);
         assertThat(recorder.names()).containsSubsequence(
@@ -266,6 +265,7 @@ class AgentWorkflowH2IntegrationTest {
         kycExecutionService.execute(created.workflowId());
         AgentArtifact firstKyc = latest(created.workflowId(), AgentType.CUSTOMER_INSIGHT);
 
+        awaitWorkflowStatus(created.workflowId(), WorkflowStatus.WAITING_INPUT);
         workflowService.provideInput(manager, created.workflowId(), "QA-IDEMPOTENCY-2",
                 new WorkflowInputRequest(WorkflowInputRequest.Action.SUPPLEMENT, firstKyc.getArtifactId(),
                         null, List.of(),
@@ -277,8 +277,7 @@ class AgentWorkflowH2IntegrationTest {
         kycExecutionService.execute(created.workflowId(),
                 new KycRuntimeSupplement(null, List.of(), List.of(qa)));
 
-        assertThat(workflowMapper.selectById(created.workflowId()).getWorkflowStatus())
-                .isEqualTo(WorkflowStatus.WAITING_INPUT);
+        awaitWorkflowStatus(created.workflowId(), WorkflowStatus.WAITING_INPUT);
         assertThat(state(created.workflowId(), AgentType.MARKET_INSIGHT).getAgentStatus())
                 .isEqualTo(AgentStatus.PENDING);
         assertThat(state(created.workflowId(), AgentType.PRODUCT_EXPERT).getAgentStatus())
@@ -365,6 +364,37 @@ class AgentWorkflowH2IntegrationTest {
         return objectMapper.writeValueAsString(value);
     }
 
+    private void awaitWorkflowStatus(String workflowId, WorkflowStatus expected) throws InterruptedException {
+        long deadline = System.nanoTime() + java.time.Duration.ofSeconds(5).toNanos();
+        WorkflowStatus actual = null;
+        while (System.nanoTime() < deadline) {
+            WorkflowState workflow = workflowMapper.selectById(workflowId);
+            actual = workflow == null ? null : workflow.getWorkflowStatus();
+            if (actual == expected) {
+                return;
+            }
+            Thread.sleep(25);
+        }
+        assertThat(actual).isEqualTo(expected);
+    }
+
+    private void awaitAgentStatus(
+            String workflowId,
+            AgentType agentType,
+            AgentStatus expected) throws InterruptedException {
+        long deadline = System.nanoTime() + java.time.Duration.ofSeconds(5).toNanos();
+        AgentStatus actual = null;
+        while (System.nanoTime() < deadline) {
+            AgentState agentState = state(workflowId, agentType);
+            actual = agentState == null ? null : agentState.getAgentStatus();
+            if (actual == expected) {
+                return;
+            }
+            Thread.sleep(25);
+        }
+        assertThat(actual).isEqualTo(expected);
+    }
+
     private AgentState state(String workflowId, AgentType type) {
         return agentMapper.selectOne(Wrappers.<AgentState>lambdaQuery()
                 .eq(AgentState::getWorkflowId, workflowId).eq(AgentState::getAgentType, type));
@@ -383,8 +413,8 @@ class AgentWorkflowH2IntegrationTest {
 
     @Order(Ordered.HIGHEST_PRECEDENCE)
     static class EventRecorder {
-        private final List<String> names = new ArrayList<>();
-        private final List<AgentExecutionRequestedEvent> requested = new ArrayList<>();
+        private final List<String> names = new CopyOnWriteArrayList<>();
+        private final List<AgentExecutionRequestedEvent> requested = new CopyOnWriteArrayList<>();
 
         @EventListener public void workflowCreated(WorkflowCreatedEvent event) { names.add("WORKFLOW_CREATED"); }
         @EventListener public void regeneration(KycRegenerationRequestedEvent event) {

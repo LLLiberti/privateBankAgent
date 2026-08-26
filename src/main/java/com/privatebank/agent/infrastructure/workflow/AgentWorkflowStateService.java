@@ -40,7 +40,7 @@ public class AgentWorkflowStateService {
     @Transactional
     public Optional<AgentExecutionClaim> claim(String workflowId, AgentType agentType) {
         WorkflowState workflow = workflowMapper.selectById(workflowId);
-        if (workflow == null || workflow.getWorkflowStatus().isTerminal()) {
+        if (workflow == null || workflow.getWorkflowStatus() != WorkflowStatus.RUNNING) {
             return Optional.empty();
         }
         AgentState state = agentState(workflowId, agentType);
@@ -56,20 +56,6 @@ public class AgentWorkflowStateService {
         state.setStartTime(now);
         state.setFinishTime(null);
         requireUpdated(agentStateMapper.updateById(state), agentType + " Agent 状态已被并发修改");
-
-        if (workflow.getWorkflowStatus() != WorkflowStatus.RUNNING
-                || workflow.getErrorCode() != null
-                || workflow.getErrorMessage() != null
-                || workflow.getStartTime() == null) {
-            workflow.setWorkflowStatus(WorkflowStatus.RUNNING);
-            workflow.setErrorCode(null);
-            workflow.setErrorMessage(null);
-            if (workflow.getStartTime() == null) {
-                workflow.setStartTime(now);
-            }
-            workflow.setUpdatedAt(now);
-            requireUpdated(workflowMapper.updateById(workflow), "工作流状态已被并发修改");
-        }
         return Optional.of(new AgentExecutionClaim(
                 workflowId, state.getAgentStateId(), agentType, executionId, workflow.getCreatedBy()));
     }

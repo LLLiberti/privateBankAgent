@@ -91,7 +91,8 @@ public class SecurityConfig {
         CorsConfiguration configuration = new CorsConfiguration();
         configuration.setAllowedOrigins(allowedOrigins);
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Idempotency-Key", "X-Request-Id"));
+        configuration.setAllowedHeaders(List.of(
+                "Authorization", "Content-Type", "Idempotency-Key", "Last-Event-ID", "X-Request-Id"));
         configuration.setExposedHeaders(List.of(
                 DatabasePrincipalFilter.NEW_TOKEN_HEADER,
                 DatabasePrincipalFilter.TOKEN_EXPIRES_AT_HEADER,

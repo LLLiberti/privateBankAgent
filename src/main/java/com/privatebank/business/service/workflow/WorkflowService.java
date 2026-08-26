@@ -370,6 +370,12 @@ public class WorkflowService {
             ready(workflowId, AgentType.MARKET_INSIGHT, true);
             ready(workflowId, AgentType.PRODUCT_EXPERT, true);
             workflow.setWorkflowStatus(WorkflowStatus.RUNNING);
+            workflow.setErrorCode(null);
+            workflow.setErrorMessage(null);
+            if (workflow.getStartTime() == null) {
+                workflow.setStartTime(now);
+            }
+
             workflow.setUpdatedAt(now);
             updateWorkflow(workflow);
             List<AgentType> downstreamAgents = List.of(AgentType.MARKET_INSIGHT, AgentType.PRODUCT_EXPERT);

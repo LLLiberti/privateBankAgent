@@ -57,6 +57,22 @@ class CfsDesignResultValidatorTest {
                 .hasMessageContaining("cfsStructure.attachments[2]");
     }
 
+    @Test
+    void rejectsWhenCombinedDataSourcesExceedTen() {
+        CfsDesignResult valid = validResult();
+        CfsDesignResult invalid = new CfsDesignResult(
+                valid.customerId(), valid.inputArtifactRefs(), valid.cfsVersion(),
+                valid.marketingStrategy(), valid.communicationGuide(), valid.comprehensiveRiskAssessment(),
+                valid.cfsStructure(), valid.pendingVerificationItems(), valid.estimatedDataItems(),
+                List.of("SRC-1", "SRC-2", "SRC-3", "SRC-4", "SRC-5", "SRC-6",
+                        "SRC-7", "SRC-8", "SRC-9", "SRC-10", "SRC-11"),
+                List.of(), List.of());
+
+        assertThatThrownBy(() -> validator.validate(invalid))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("最多 10 项");
+    }
+
     private CfsDesignResult withAttachments(CfsDesignResult source, List<String> attachments) {
         return new CfsDesignResult(
                 source.customerId(), source.inputArtifactRefs(), source.cfsVersion(),

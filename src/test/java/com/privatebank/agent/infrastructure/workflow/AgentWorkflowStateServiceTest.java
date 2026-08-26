@@ -19,6 +19,11 @@ import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -31,14 +36,15 @@ import static org.mockito.Mockito.when;
 class AgentWorkflowStateServiceTest {
 
     @Test
-    void claimsOnlyReadyNonTerminalAgentAndMovesItToRunning() {
+    void claimsOnlyReadyAgentInRunningWorkflowWithoutRewritingWorkflow() {
         Fixture fixture = fixture();
-        WorkflowState workflow = workflow(WorkflowStatus.CREATED);
+        WorkflowState workflow = workflow(WorkflowStatus.RUNNING);
+        workflow.setErrorCode("STALE_ERROR");
+        workflow.setErrorMessage("stale error message");
         AgentState state = agentState(AgentType.MARKET_INSIGHT, AgentStatus.READY, "OLD");
         when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
         when(fixture.agentStateMapper.selectOne(any())).thenReturn(state);
         when(fixture.agentStateMapper.updateById(any(AgentState.class))).thenReturn(1);
-        when(fixture.workflowMapper.updateById(any(WorkflowState.class))).thenReturn(1);
 
         Optional<AgentExecutionClaim> result = fixture.service().claim("WF-1", AgentType.MARKET_INSIGHT);
 
@@ -48,23 +54,75 @@ class AgentWorkflowStateServiceTest {
         assertThat(state.getExecutionId()).isEqualTo(result.orElseThrow().executionId());
         assertThat(state.getStartTime()).isNotNull();
         assertThat(workflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
-        assertThat(workflow.getStartTime()).isNotNull();
+        assertThat(workflow.getStartTime()).isNull();
+        assertThat(workflow.getErrorCode()).isEqualTo("STALE_ERROR");
+        verify(fixture.workflowMapper, never()).updateById(any(WorkflowState.class));
     }
 
     @Test
-    void doesNotRewriteAlreadyRunningWorkflowWhenClaimingParallelAgent() {
+    void doesNotClaimAgentOutsideRunningWorkflow() {
         Fixture fixture = fixture();
-        WorkflowState workflow = workflow(WorkflowStatus.RUNNING);
-        workflow.setStartTime(LocalDateTime.now().minusMinutes(1));
-        AgentState state = agentState(AgentType.PRODUCT_EXPERT, AgentStatus.READY, null);
+        WorkflowState workflow = workflow(WorkflowStatus.CREATED);
         when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow);
-        when(fixture.agentStateMapper.selectOne(any())).thenReturn(state);
-        when(fixture.agentStateMapper.updateById(any(AgentState.class))).thenReturn(1);
 
         Optional<AgentExecutionClaim> result = fixture.service().claim("WF-1", AgentType.PRODUCT_EXPERT);
 
-        assertThat(result).isPresent();
+        assertThat(result).isEmpty();
+        verify(fixture.agentStateMapper, never()).selectOne(any());
+        verify(fixture.agentStateMapper, never()).updateById(any(AgentState.class));
         verify(fixture.workflowMapper, never()).updateById(any(WorkflowState.class));
+    }
+
+    @Test
+    void claimsDifferentAgentsConcurrentlyWithoutCompetingForWorkflowState() throws Exception {
+        Fixture fixture = fixture();
+        ThreadLocal<AgentState> selectedState = new ThreadLocal<>();
+        AgentState market = agentState(AgentType.MARKET_INSIGHT, AgentStatus.READY, null);
+        AgentState product = agentState(AgentType.PRODUCT_EXPERT, AgentStatus.READY, null);
+        when(fixture.workflowMapper.selectById("WF-1")).thenAnswer(invocation -> {
+            WorkflowState workflow = workflow(WorkflowStatus.RUNNING);
+            workflow.setErrorCode("STALE_ERROR");
+            return workflow;
+        });
+        when(fixture.agentStateMapper.selectOne(any())).thenAnswer(invocation -> selectedState.get());
+        when(fixture.agentStateMapper.updateById(any(AgentState.class))).thenReturn(1);
+
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<Optional<AgentExecutionClaim>> marketClaim = executor.submit(() -> {
+                selectedState.set(market);
+                ready.countDown();
+                start.await();
+                try {
+                    return fixture.service().claim("WF-1", AgentType.MARKET_INSIGHT);
+                } finally {
+                    selectedState.remove();
+                }
+            });
+            Future<Optional<AgentExecutionClaim>> productClaim = executor.submit(() -> {
+                selectedState.set(product);
+                ready.countDown();
+                start.await();
+                try {
+                    return fixture.service().claim("WF-1", AgentType.PRODUCT_EXPERT);
+                } finally {
+                    selectedState.remove();
+                }
+            });
+
+            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+
+            assertThat(marketClaim.get(5, TimeUnit.SECONDS)).isPresent();
+            assertThat(productClaim.get(5, TimeUnit.SECONDS)).isPresent();
+            assertThat(market.getAgentStatus()).isEqualTo(AgentStatus.RUNNING);
+            assertThat(product.getAgentStatus()).isEqualTo(AgentStatus.RUNNING);
+            verify(fixture.workflowMapper, never()).updateById(any(WorkflowState.class));
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     @Test
