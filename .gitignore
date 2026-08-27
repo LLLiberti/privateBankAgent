@@ -1,17 +1,24 @@
 target/
 .idea/
 *.iml
+.codex-tool-probe
+.larkhome/
+tmp/
 .env
 .env.*
 !.env.example
 storage/
 logs/
-src/main/resources/db/migration/*.sql
 docs/
 *.docx
-.vscode/
 src/main/resources/application.yml
 sql/
+
+# Accidental local dependency repositories created inside the checkout
+.m2/
+**/.m2/
+*mvn_repo/
+*.m2*repository/
 
 # ==============================
 # Python KG service
@@ -35,6 +42,8 @@ env/
 # Runtime outputs
 output/
 *.log
+*.orig
+*.bak
 
 # IDE / OS
 .vscode/
