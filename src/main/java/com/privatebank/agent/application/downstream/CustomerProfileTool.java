@@ -4,8 +4,6 @@ import com.privatebank.agent.application.kyc.KycDataMaskingService;
 import com.privatebank.agent.domain.kyc.KycCustomerData;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
 import com.privatebank.agent.infrastructure.kyc.KycCustomerDataLoader;
-import com.privatebank.business.entity.workflow.WorkflowState;
-import com.privatebank.business.mapper.workflow.WorkflowStateMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -24,15 +22,25 @@ public class CustomerProfileTool {
 
     private final KycCustomerDataLoader customerDataLoader;
     private final KycDataMaskingService dataMaskingService;
-    private final WorkflowStateMapper workflowStateMapper;
 
-    public Map<String, Object> getCustomerProfile(String workflowId) {
-        WorkflowState workflow = workflowStateMapper.selectById(workflowId);
-        if (workflow == null) {
-            throw new IllegalStateException("工作流不存在: " + workflowId);
+    public BoundCustomerProfileTool bind(Long personId) {
+        if (personId == null) {
+            throw new IllegalStateException("Agent运行时缺少personId");
         }
-        KycCustomerData customerData = customerDataLoader.load(workflow.getPersonId());
-        KycMaskedInput maskedInput = dataMaskingService.mask(customerData);
-        return maskedInput.payload();
+        return new BoundCustomerProfileTool(personId);
+    }
+
+    public final class BoundCustomerProfileTool {
+        private final Long personId;
+
+        private BoundCustomerProfileTool(Long personId) {
+            this.personId = personId;
+        }
+
+        public Map<String, Object> getCustomerProfile() {
+            KycCustomerData customerData = customerDataLoader.load(personId);
+            KycMaskedInput maskedInput = dataMaskingService.mask(customerData);
+            return maskedInput.payload();
+        }
     }
 }

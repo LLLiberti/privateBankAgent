@@ -6,7 +6,7 @@ import com.privatebank.agent.domain.kyc.KycCustomerData;
 import com.privatebank.agent.domain.kyc.KycGraphRelationship;
 import com.privatebank.agent.domain.kyc.KycInputValidationException;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
-import com.privatebank.agent.domain.kyc.KycQaItem;
+import com.privatebank.business.dto.workflow.KycQaItem;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 

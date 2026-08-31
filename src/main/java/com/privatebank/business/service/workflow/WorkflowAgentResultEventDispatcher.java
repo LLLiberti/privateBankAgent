@@ -1,18 +1,18 @@
-package com.privatebank.agent.adapter.workflow;
+package com.privatebank.business.service.workflow;
 
-import com.privatebank.agent.domain.event.AgentFailedEvent;
-import com.privatebank.agent.domain.event.AgentSucceededEvent;
-import com.privatebank.agent.infrastructure.kyc.KycAsyncConfiguration;
-import com.privatebank.business.service.workflow.WorkflowAgentResultListener;
+import com.privatebank.agent.application.runtime.AgentExecutionCompletedEvent;
+import com.privatebank.agent.application.runtime.AgentExecutionFailedEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
 import org.springframework.jdbc.CannotGetJdbcConnectionException;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import java.sql.SQLTransientConnectionException;
 
+/**
+ * Synchronously persists an Agent outcome before control returns to the Agent executor.
+ */
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -23,22 +23,14 @@ public class WorkflowAgentResultEventDispatcher {
 
     private final WorkflowAgentResultListener resultListener;
 
-    @Async(KycAsyncConfiguration.KYC_EXECUTOR)
     @EventListener
-    public void onAgentSucceeded(AgentSucceededEvent event) {
-        dispatch(
-                event.workflowId(),
-                event.agentType().name(),
-                () -> resultListener.onAgentSucceeded(event));
+    public void onAgentCompleted(AgentExecutionCompletedEvent event) {
+        dispatch(event.workflowId(), event.agentType().name(), () -> resultListener.onAgentCompleted(event));
     }
 
-    @Async(KycAsyncConfiguration.KYC_EXECUTOR)
     @EventListener
-    public void onAgentFailed(AgentFailedEvent event) {
-        dispatch(
-                event.workflowId(),
-                event.agentType().name(),
-                () -> resultListener.onAgentFailed(event));
+    public void onAgentFailed(AgentExecutionFailedEvent event) {
+        dispatch(event.workflowId(), event.agentType().name(), () -> resultListener.onAgentFailed(event));
     }
 
     private void dispatch(String workflowId, String agentType, Runnable action) {

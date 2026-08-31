@@ -130,7 +130,7 @@ public class CfsDesignAgentExecutor implements BusinessAgentExecutor<CfsDesignIn
         String lastValidationError = null;
         int attempts = Math.max(1, properties.maxBusinessRepairAttempts());
         long deadlineNanos = System.nanoTime() + properties.cfsTotalTimeout().toNanos();
-        Toolkit toolkit = customerProfileTool == null ? null : buildToolkit();
+        Toolkit toolkit = customerProfileTool == null ? null : buildToolkit(request);
         for (int attempt = 1; attempt <= attempts; attempt++) {
             if (System.nanoTime() > deadlineNanos) {
                 throw new IllegalArgumentException("CFS 方案生成总执行超时");
@@ -159,9 +159,13 @@ public class CfsDesignAgentExecutor implements BusinessAgentExecutor<CfsDesignIn
                 "CFS 方案 Agent 连续返回不符合格式要求的结果：" + lastValidationError);
     }
 
-    private Toolkit buildToolkit() {
+    private Toolkit buildToolkit(AgentExecutionRequest<CfsDesignInput> request) {
+        Object personIdValue = request.attributes().get("personId");
+        if (!(personIdValue instanceof Number personId)) {
+            throw new IllegalStateException("CFS Agent运行时缺少personId");
+        }
         Toolkit toolkit = new Toolkit();
-        toolkit.registerTool(customerProfileTool);
+        toolkit.registerTool(customerProfileTool.bind(personId.longValue()));
         return toolkit;
     }
 

@@ -1,22 +1,22 @@
-package com.privatebank.agent.infrastructure.agentscope;
+package com.privatebank.business.service.workflow;
 
 import com.privatebank.agent.application.runtime.AgentProgressEvent;
-import com.privatebank.agent.application.runtime.AgentProgressPublisher;
-import com.privatebank.business.service.workflow.WorkflowEventHub;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+/** Translates Agent progress into the workflow's client-facing event stream. */
 @Component
 @RequiredArgsConstructor
-public class WorkflowAgentProgressPublisher implements AgentProgressPublisher {
+public class WorkflowAgentProgressListener {
 
     private final WorkflowEventHub eventHub;
 
-    @Override
-    public void publish(AgentProgressEvent event) {
+    @EventListener
+    public void onAgentProgress(AgentProgressEvent event) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("workflowId", event.workflowId());
         payload.put("executionId", event.executionId());

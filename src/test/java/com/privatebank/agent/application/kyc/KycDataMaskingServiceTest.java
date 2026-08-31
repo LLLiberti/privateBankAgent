@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.privatebank.agent.domain.kyc.KycCustomerData;
 import com.privatebank.agent.domain.kyc.KycInputValidationException;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
-import com.privatebank.agent.domain.kyc.KycQaItem;
+import com.privatebank.business.dto.workflow.KycQaItem;
 import com.privatebank.agent.domain.kyc.KycGraphRelationship;
 import com.privatebank.business.dto.customer.CustomerSummaryResponse;
 import org.junit.jupiter.api.Test;

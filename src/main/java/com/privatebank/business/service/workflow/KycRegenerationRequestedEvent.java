@@ -1,6 +1,6 @@
 package com.privatebank.business.service.workflow;
 
-import com.privatebank.agent.domain.kyc.KycQaItem;
+import com.privatebank.business.dto.workflow.KycQaItem;
 
 import java.util.List;
 

@@ -1,14 +1,10 @@
-package com.privatebank.agent.application.kycchat;
+package com.privatebank.business.service.workflow;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.privatebank.agent.application.kyc.KycDataMaskingService;
-import com.privatebank.agent.application.kyc.KycRuntimeSupplement;
-import com.privatebank.agent.domain.kyc.KycCustomerData;
-import com.privatebank.agent.domain.kyc.KycMaskedInput;
-import com.privatebank.agent.infrastructure.kyc.KycCustomerDataLoader;
+import com.privatebank.agent.application.kycchat.KycChatContext;
 import com.privatebank.business.common.exception.BusinessException;
 import com.privatebank.business.common.exception.ErrorCode;
 import com.privatebank.business.entity.workflow.AgentArtifact;
@@ -25,25 +21,19 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 
+/** Owns workflow authorization and artifact selection for KYC chat. */
 @Service
 @RequiredArgsConstructor
-public class KycChatContextService {
-
-    public static final String SAME_AS_KYC_INPUT = "SAME_AS_KYC_INPUT";
-    public static final String CURRENT_DATA_CHANGED_SINCE_KYC = "CURRENT_DATA_CHANGED_SINCE_KYC";
+public class KycChatWorkflowContextService {
 
     private static final Pattern ALIAS_TOKEN = Pattern.compile("[A-Z]+-\\d+");
 
     private final WorkflowStateMapper workflowStateMapper;
     private final AgentArtifactMapper artifactMapper;
     private final CurrentUserService currentUserService;
-    private final KycCustomerDataLoader customerDataLoader;
-    private final KycDataMaskingService dataMaskingService;
-    private final KycChatAliasNormalizer aliasNormalizer;
     private final ObjectMapper objectMapper;
 
     @Transactional(readOnly = true)
@@ -81,33 +71,6 @@ public class KycChatContextService {
                     "KYC结果不是当前工作流的最新版本");
         }
         return parseContext(workflowId, personId, artifact);
-    }
-
-    @Transactional(readOnly = true)
-    public KycChatPreparedTurn prepareTurn(
-            KycChatContext context,
-            String managerMessage,
-            Map<String, String> canonicalMappings) {
-        KycCustomerData customerData = customerDataLoader.load(context.personId());
-        KycMaskedInput currentSnapshot = dataMaskingService.mask(customerData);
-        KycMaskedInput messageInput = dataMaskingService.mask(
-                customerData, new KycRuntimeSupplement(managerMessage, List.of()));
-        Object maskedMessage = messageInput.payload().get("managerInstruction");
-        if (!(maskedMessage instanceof String text) || !StringUtils.hasText(text)) {
-            throw business(HttpStatus.BAD_REQUEST, ErrorCode.INVALID_ARGUMENT,
-                    "客户经理消息脱敏后为空");
-        }
-
-        KycChatAliasNormalizer.AliasPlan plan = aliasNormalizer.plan(
-                messageInput.aliasMappings(), canonicalMappings);
-        String comparison = context.maskedInputSha256().equals(currentSnapshot.sha256())
-                ? SAME_AS_KYC_INPUT
-                : CURRENT_DATA_CHANGED_SINCE_KYC;
-        return new KycChatPreparedTurn(
-                aliasNormalizer.normalizeText(text, plan),
-                aliasNormalizer.normalizePayload(currentSnapshot.payload(), plan),
-                comparison,
-                plan.canonicalMappings());
     }
 
     private KycChatContext parseContext(String workflowId, Long personId, AgentArtifact artifact) {

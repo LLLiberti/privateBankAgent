@@ -128,7 +128,7 @@ class KycChatSessionRegistryTest {
         return new KycChatPreparedTurn(
                 message,
                 Map.of("person", Map.of("personAlias", "P-1")),
-                KycChatContextService.SAME_AS_KYC_INPUT,
+                KycChatInputPreparationService.SAME_AS_KYC_INPUT,
                 Map.of("P-1", "张三"));
     }
 }

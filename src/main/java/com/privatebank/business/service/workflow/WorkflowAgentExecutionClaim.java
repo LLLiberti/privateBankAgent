@@ -1,11 +1,12 @@
-package com.privatebank.agent.application.runtime;
+package com.privatebank.business.service.workflow;
 
 import com.privatebank.business.enums.workflow.AgentType;
 
-public record AgentExecutionClaim(
+public record WorkflowAgentExecutionClaim(
         String workflowId,
         String agentStateId,
         AgentType agentType,
         String executionId,
-        String operatorUserId) {
+        String operatorUserId,
+        Long personId) {
 }

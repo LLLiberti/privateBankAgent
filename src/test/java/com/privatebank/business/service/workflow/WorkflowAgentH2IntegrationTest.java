@@ -1,15 +1,12 @@
-package com.privatebank.agent.infrastructure.workflow;
+package com.privatebank.business.service.workflow;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.privatebank.agent.adapter.workflow.DownstreamAgentWorkflowListener;
-import com.privatebank.agent.adapter.workflow.KycWorkflowListener;
+import com.privatebank.agent.adapter.workflow.AgentExecutionListener;
 import com.privatebank.agent.application.downstream.DownstreamAgentExecutionService;
 import com.privatebank.agent.application.kyc.*;
 import com.privatebank.agent.application.runtime.*;
-import com.privatebank.agent.domain.event.AgentExecutionRequestedEvent;
-import com.privatebank.agent.domain.event.AgentSucceededEvent;
 import com.privatebank.agent.domain.kyc.*;
 import com.privatebank.agent.infrastructure.kyc.KycCustomerDataLoader;
 import com.privatebank.business.dto.customer.CustomerSummaryResponse;
@@ -56,9 +53,9 @@ import static org.mockito.Mockito.when;
         "mybatis-plus.configuration.database-id=h2",
         "private-bank.graph.enabled=false"
 })
-@Import(AgentWorkflowH2IntegrationTest.EventRecorderConfiguration.class)
+@Import(WorkflowAgentH2IntegrationTest.EventRecorderConfiguration.class)
 @Sql(scripts = "/workflow-h2-schema.sql")
-class AgentWorkflowH2IntegrationTest {
+class WorkflowAgentH2IntegrationTest {
     private static final long CUSTOMER_ID = 1001L;
     private static final long IMPORT_BATCH_ID = 2001L;
     private static final String MANAGER_DESCRIPTION = "客户经理补充的敏感原始描述不应进入持久化结果";
@@ -66,7 +63,8 @@ class AgentWorkflowH2IntegrationTest {
     @Autowired WorkflowService workflowService;
     @Autowired AdminWorkflowCleanupService adminWorkflowCleanupService;
     @Autowired KycWorkflowExecutionService kycExecutionService;
-    @Autowired AgentWorkflowStateService agentStateService;
+    @Autowired WorkflowAgentStateService agentStateService;
+    @Autowired org.springframework.context.ApplicationEventPublisher eventPublisher;
     @Autowired WorkflowStateMapper workflowMapper;
     @Autowired AgentStateMapper agentMapper;
     @Autowired AgentArtifactMapper artifactMapper;
@@ -77,8 +75,7 @@ class AgentWorkflowH2IntegrationTest {
     @MockBean CurrentUserService currentUserService;
     @MockBean CustomerDataMapper customerDataMapper;
     @MockBean ImportBatchMapper importBatchMapper;
-    @MockBean KycWorkflowListener kycWorkflowListener;
-    @MockBean DownstreamAgentWorkflowListener downstreamListener;
+    @MockBean AgentExecutionListener agentExecutionListener;
     @MockBean DownstreamAgentExecutionService downstreamExecutionService;
     @MockBean KycCustomerDataLoader customerDataLoader;
     @Test
@@ -180,10 +177,10 @@ class AgentWorkflowH2IntegrationTest {
                         "PRIVATE_BANK_REVIEW", "固定分析范围"));
         assertThat(created.workflowStatus()).isEqualTo(WorkflowStatus.CREATED);
         assertThat(workflowMapper.selectById(created.workflowId()).getWorkflowStatus())
-                .isEqualTo(WorkflowStatus.CREATED);
+                .isEqualTo(WorkflowStatus.RUNNING);
 
         configureKyc();
-        kycExecutionService.execute(created.workflowId());
+        kycExecutionService.execute(recorder.latestRequested(AgentType.CUSTOMER_INSIGHT));
         AgentArtifact firstKyc = latest(created.workflowId(), AgentType.CUSTOMER_INSIGHT);
         assertKyc(firstKyc, 1);
         awaitWorkflowStatus(created.workflowId(), WorkflowStatus.WAITING_INPUT);
@@ -192,42 +189,37 @@ class AgentWorkflowH2IntegrationTest {
                 new WorkflowInputRequest(WorkflowInputRequest.Action.SUPPLEMENT, firstKyc.getArtifactId(),
                         MANAGER_DESCRIPTION, List.of("待确认的客户经理信号")));
         assertThat(state(created.workflowId(), AgentType.CUSTOMER_INSIGHT).getAgentStatus())
-                .isEqualTo(AgentStatus.READY);
+                .isEqualTo(AgentStatus.RUNNING);
         assertThat(workflowMapper.selectById(created.workflowId()).getWorkflowStatus())
                 .isEqualTo(WorkflowStatus.RUNNING);
 
-        kycExecutionService.execute(created.workflowId(),
-                new KycRuntimeSupplement(null, List.of("待确认的客户经理信号")));
+        kycExecutionService.execute(recorder.latestRequested(AgentType.CUSTOMER_INSIGHT));
         AgentArtifact secondKyc = latest(created.workflowId(), AgentType.CUSTOMER_INSIGHT);
         assertKyc(secondKyc, 2);
         assertThat(secondKyc.getArtifactId()).isNotEqualTo(firstKyc.getArtifactId());
         assertThat(secondKyc.getResult()).doesNotContain(MANAGER_DESCRIPTION);
         verify(maskingService).mask(any(KycCustomerData.class),
-                eq(new KycRuntimeSupplement(null, List.of("待确认的客户经理信号"))));
+                eq(new KycRuntimeSupplement(
+                        MANAGER_DESCRIPTION, List.of("待确认的客户经理信号"))));
         awaitWorkflowStatus(created.workflowId(), WorkflowStatus.WAITING_INPUT);
 
         workflowService.provideInput(manager, created.workflowId(), "IDEMPOTENCY-3",
                 new WorkflowInputRequest(WorkflowInputRequest.Action.CONTINUE, secondKyc.getArtifactId(), null, null));
         assertThat(state(created.workflowId(), AgentType.MARKET_INSIGHT).getAgentStatus())
-                .isEqualTo(AgentStatus.READY);
+                .isEqualTo(AgentStatus.RUNNING);
         assertThat(state(created.workflowId(), AgentType.PRODUCT_EXPERT).getAgentStatus())
-                .isEqualTo(AgentStatus.READY);
+                .isEqualTo(AgentStatus.RUNNING);
 
-        AgentExecutionClaim market = agentStateService.claim(created.workflowId(), AgentType.MARKET_INSIGHT).orElseThrow();
-        agentStateService.complete(market, "{\"marketVersion\":\"M-1\"}", null);
-        AgentExecutionClaim product = agentStateService.claim(created.workflowId(), AgentType.PRODUCT_EXPERT).orElseThrow();
-        agentStateService.complete(product, "{\"productVersion\":\"P-1\"}", null);
+        complete(recorder.latestRequested(AgentType.MARKET_INSIGHT), "{\"marketVersion\":\"M-1\"}", null);
+        complete(recorder.latestRequested(AgentType.PRODUCT_EXPERT), "{\"productVersion\":\"P-1\"}", null);
 
-        awaitAgentStatus(created.workflowId(), AgentType.SOLUTION_DESIGN, AgentStatus.READY);
-        AgentExecutionClaim cfs = agentStateService.claim(created.workflowId(), AgentType.SOLUTION_DESIGN).orElseThrow();
-        agentStateService.complete(cfs, json(Map.of("cfsVersion", "CFS-1",
-                "inputArtifactIds", List.of(secondKyc.getArtifactId()))), null);
+        awaitAgentStatus(created.workflowId(), AgentType.SOLUTION_DESIGN, AgentStatus.RUNNING);
+        complete(recorder.latestRequested(AgentType.SOLUTION_DESIGN), json(Map.of(
+                "cfsVersion", "CFS-1", "inputArtifactIds", List.of(secondKyc.getArtifactId()))), null);
         AgentArtifact cfsArtifact = latest(created.workflowId(), AgentType.SOLUTION_DESIGN);
 
-        awaitAgentStatus(created.workflowId(), AgentType.COMPLIANCE_CHECK, AgentStatus.READY);
-        AgentExecutionClaim compliance = agentStateService.claim(
-                created.workflowId(), AgentType.COMPLIANCE_CHECK).orElseThrow();
-        agentStateService.complete(compliance, json(Map.of(
+        awaitAgentStatus(created.workflowId(), AgentType.COMPLIANCE_CHECK, AgentStatus.RUNNING);
+        complete(recorder.latestRequested(AgentType.COMPLIANCE_CHECK), json(Map.of(
                 "cfsArtifactId", cfsArtifact.getArtifactId(),
                 "cfsArtifactRef", cfsArtifact.getArtifactId())), "PASS");
 
@@ -235,19 +227,20 @@ class AgentWorkflowH2IntegrationTest {
         assertThat(artifactMapper.selectList(Wrappers.<AgentArtifact>lambdaQuery()
                 .eq(AgentArtifact::getWorkflowId, created.workflowId()))).hasSize(6);
         assertThat(recorder.names()).containsSubsequence(
-                "WORKFLOW_CREATED", "AGENT_SUCCEEDED:CUSTOMER_INSIGHT",
-                "KYC_REGENERATION_REQUESTED", "AGENT_SUCCEEDED:CUSTOMER_INSIGHT",
+                "WORKFLOW_CREATED", "AGENT_COMPLETED:CUSTOMER_INSIGHT",
+                "KYC_REGENERATION_REQUESTED", "AGENT_COMPLETED:CUSTOMER_INSIGHT",
                 "DOWNSTREAM_AGENTS_READY");
         assertThat(recorder.names()).contains(
-                "AGENT_SUCCEEDED:MARKET_INSIGHT", "AGENT_SUCCEEDED:PRODUCT_EXPERT",
-                "AGENT_EXECUTION_REQUESTED:SOLUTION_DESIGN", "AGENT_SUCCEEDED:SOLUTION_DESIGN",
-                "AGENT_EXECUTION_REQUESTED:COMPLIANCE_CHECK", "AGENT_SUCCEEDED:COMPLIANCE_CHECK");        assertThat(recorder.requested()).extracting(AgentExecutionRequestedEvent::agentType)
-                .containsExactly(AgentType.SOLUTION_DESIGN, AgentType.COMPLIANCE_CHECK);
-        assertThat(recorder.requested().get(0).inputArtifactIds())
+                "AGENT_COMPLETED:MARKET_INSIGHT", "AGENT_COMPLETED:PRODUCT_EXPERT",
+                "AGENT_EXECUTION_REQUESTED:SOLUTION_DESIGN", "AGENT_COMPLETED:SOLUTION_DESIGN",
+                "AGENT_EXECUTION_REQUESTED:COMPLIANCE_CHECK", "AGENT_COMPLETED:COMPLIANCE_CHECK");
+        assertThat(recorder.requested()).extracting(AgentExecutionRequestedEvent::agentType)
+                .contains(AgentType.SOLUTION_DESIGN, AgentType.COMPLIANCE_CHECK);
+        assertThat(recorder.latestRequested(AgentType.SOLUTION_DESIGN).inputArtifactIds())
                 .containsEntry("kycArtifactId", secondKyc.getArtifactId())
                 .containsEntry("marketArtifactId", latest(created.workflowId(), AgentType.MARKET_INSIGHT).getArtifactId())
                 .containsEntry("kypArtifactId", latest(created.workflowId(), AgentType.PRODUCT_EXPERT).getArtifactId());
-        assertThat(recorder.requested().get(1).inputArtifactIds())
+        assertThat(recorder.latestRequested(AgentType.COMPLIANCE_CHECK).inputArtifactIds())
                 .containsEntry("cfsArtifactId", cfsArtifact.getArtifactId());
     }
 
@@ -262,7 +255,7 @@ class AgentWorkflowH2IntegrationTest {
                 new CreateWorkflowRequest(CUSTOMER_ID, IMPORT_BATCH_ID, LocalDate.of(2026, 8, 1),
                         "PRIVATE_BANK_REVIEW", null));
         configureKyc();
-        kycExecutionService.execute(created.workflowId());
+        kycExecutionService.execute(recorder.latestRequested(AgentType.CUSTOMER_INSIGHT));
         AgentArtifact firstKyc = latest(created.workflowId(), AgentType.CUSTOMER_INSIGHT);
 
         awaitWorkflowStatus(created.workflowId(), WorkflowStatus.WAITING_INPUT);
@@ -273,9 +266,10 @@ class AgentWorkflowH2IntegrationTest {
         assertThat(workflowMapper.selectById(created.workflowId()).getWorkflowStatus())
                 .isEqualTo(WorkflowStatus.RUNNING);
 
-        KycQaItem qa = new KycQaItem("Q1", "P-1001 liquidity arrangement?", "customer declines to confirm");
-        kycExecutionService.execute(created.workflowId(),
-                new KycRuntimeSupplement(null, List.of(), List.of(qa)));
+        com.privatebank.business.dto.workflow.KycQaItem qa =
+                new com.privatebank.business.dto.workflow.KycQaItem(
+                        "Q1", "P-1001 liquidity arrangement?", "customer declines to confirm");
+        kycExecutionService.execute(recorder.latestRequested(AgentType.CUSTOMER_INSIGHT));
 
         awaitWorkflowStatus(created.workflowId(), WorkflowStatus.WAITING_INPUT);
         assertThat(state(created.workflowId(), AgentType.MARKET_INSIGHT).getAgentStatus())
@@ -364,6 +358,20 @@ class AgentWorkflowH2IntegrationTest {
         return objectMapper.writeValueAsString(value);
     }
 
+    private void complete(
+            AgentExecutionRequestedEvent requested,
+            String resultJson,
+            String complianceResult) {
+        eventPublisher.publishEvent(new AgentExecutionCompletedEvent(
+                requested.workflowId(),
+                requested.agentStateId(),
+                requested.agentType(),
+                requested.executionId(),
+                resultJson,
+                complianceResult,
+                0));
+    }
+
     private void awaitWorkflowStatus(String workflowId, WorkflowStatus expected) throws InterruptedException {
         long deadline = System.nanoTime() + java.time.Duration.ofSeconds(5).toNanos();
         WorkflowStatus actual = null;
@@ -423,8 +431,8 @@ class AgentWorkflowH2IntegrationTest {
         @EventListener public void downstreamReady(DownstreamAgentsReadyEvent event) {
             names.add("DOWNSTREAM_AGENTS_READY");
         }
-        @EventListener public void succeeded(AgentSucceededEvent event) {
-            names.add("AGENT_SUCCEEDED:" + event.agentType());
+        @EventListener public void completed(AgentExecutionCompletedEvent event) {
+            names.add("AGENT_COMPLETED:" + event.agentType());
         }
         @EventListener public void requested(AgentExecutionRequestedEvent event) {
             names.add("AGENT_EXECUTION_REQUESTED:" + event.agentType());
@@ -433,5 +441,11 @@ class AgentWorkflowH2IntegrationTest {
 
         List<String> names() { return List.copyOf(names); }
         List<AgentExecutionRequestedEvent> requested() { return List.copyOf(requested); }
+        AgentExecutionRequestedEvent latestRequested(AgentType type) {
+            return requested.stream()
+                    .filter(event -> event.agentType() == type)
+                    .reduce((left, right) -> right)
+                    .orElseThrow(() -> new AssertionError("Missing execution request for " + type));
+        }
     }
 }

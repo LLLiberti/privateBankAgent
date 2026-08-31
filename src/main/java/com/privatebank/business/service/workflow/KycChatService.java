@@ -1,7 +1,7 @@
 package com.privatebank.business.service.workflow;
 
 import com.privatebank.agent.application.kycchat.KycChatContext;
-import com.privatebank.agent.application.kycchat.KycChatContextService;
+import com.privatebank.agent.application.kycchat.KycChatInputPreparationService;
 import com.privatebank.agent.application.kycchat.KycChatSessionRegistry;
 import com.privatebank.agent.application.kycchat.KycChatStreamingAgent;
 import com.privatebank.agent.infrastructure.kyc.KycAsyncConfiguration;
@@ -20,17 +20,20 @@ import java.util.concurrent.TimeoutException;
 @Slf4j
 public class KycChatService {
 
-    private final KycChatContextService contextService;
+    private final KycChatWorkflowContextService workflowContextService;
+    private final KycChatInputPreparationService inputPreparationService;
     private final KycChatSessionRegistry sessionRegistry;
     private final KycChatStreamingAgent streamingAgent;
     private final Executor executor;
 
     public KycChatService(
-            KycChatContextService contextService,
+            KycChatWorkflowContextService workflowContextService,
+            KycChatInputPreparationService inputPreparationService,
             KycChatSessionRegistry sessionRegistry,
             KycChatStreamingAgent streamingAgent,
             @Qualifier(KycAsyncConfiguration.KYC_EXECUTOR) Executor executor) {
-        this.contextService = contextService;
+        this.workflowContextService = workflowContextService;
+        this.inputPreparationService = inputPreparationService;
         this.sessionRegistry = sessionRegistry;
         this.streamingAgent = streamingAgent;
         this.executor = executor;
@@ -42,7 +45,7 @@ public class KycChatService {
             String idempotencyKey,
             String lastEventId,
             KycChatRequest request) {
-        KycChatContext context = contextService.requireContext(
+        KycChatContext context = workflowContextService.requireContext(
                 principal, workflowId, request.personId(), request.kycArtifactId());
         KycChatSessionRegistry.OpenResult open = sessionRegistry.open(
                 context,
@@ -51,7 +54,7 @@ public class KycChatService {
                 idempotencyKey,
                 lastEventId,
                 request.message(),
-                mappings -> contextService.prepareTurn(context, request.message(), mappings));
+                mappings -> inputPreparationService.prepareTurn(context, request.message(), mappings));
         if (open.startsNewTurn()) {
             startAgent(open);
         }

@@ -115,6 +115,7 @@ class WorkflowReportRenderingTest {
                 workflowMapper,
                 agentStateMapper,
                 artifactMapper,
+                mock(WorkflowAgentStateService.class),
                 mock(WorkflowReviewMapper.class),
                 mock(CustomerDataMapper.class),
                 mock(ImportBatchMapper.class),

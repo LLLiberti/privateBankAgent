@@ -4,7 +4,8 @@ import com.baomidou.mybatisplus.autoconfigure.MybatisPlusAutoConfiguration;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.privatebank.agent.adapter.workflow.KycWorkflowListener;
+import com.privatebank.agent.adapter.workflow.AgentExecutionListener;
+import com.privatebank.agent.application.downstream.DownstreamAgentExecutionService;
 import com.privatebank.agent.application.kyc.KycRuntimeSupplement;
 import com.privatebank.agent.application.kyc.KycSensitiveTextPolicy;
 import com.privatebank.agent.application.kyc.KycAgentExecutor;
@@ -16,11 +17,10 @@ import com.privatebank.agent.application.runtime.AgentProgressPublisher;
 import com.privatebank.agent.config.AgentScopeConfiguration;
 import com.privatebank.agent.config.AgentScopeProperties;
 import com.privatebank.agent.infrastructure.agentscope.AgentRuntimeContextFactory;
-import com.privatebank.agent.infrastructure.workflow.AgentWorkflowStateService;
 import com.privatebank.agent.infrastructure.agentscope.AgentScopeExecutionEngine;
 import com.privatebank.agent.domain.kyc.KycCustomerData;
 import com.privatebank.agent.domain.kyc.KycMaskedInput;
-import com.privatebank.agent.domain.kyc.KycQaItem;
+import com.privatebank.business.dto.workflow.KycQaItem;
 import com.privatebank.agent.domain.kyc.KycOutputValidationException;
 import com.privatebank.business.common.idempotency.IdempotencyExecutor;
 import com.privatebank.business.common.exception.BusinessException;
@@ -46,7 +46,11 @@ import com.privatebank.business.security.CurrentUserPrincipal;
 import com.privatebank.business.security.CurrentUserService;
 import com.privatebank.business.service.document.FileStorageService;
 import com.privatebank.business.service.workflow.CustomerInsightAliasRestorer;
+import com.privatebank.business.service.workflow.WorkflowAgentDispatchListener;
+import com.privatebank.business.service.workflow.WorkflowAgentDispatchService;
+import com.privatebank.business.service.workflow.WorkflowAgentResultEventDispatcher;
 import com.privatebank.business.service.workflow.WorkflowAgentResultListener;
+import com.privatebank.business.service.workflow.WorkflowAgentStateService;
 import com.privatebank.business.service.workflow.WorkflowEventHub;
 import com.privatebank.business.service.workflow.WorkflowService;
 import org.awaitility.Awaitility;
@@ -606,28 +610,35 @@ class KycDatabaseWorkflowLiveTest {
         }
 
         @Bean
-        KycWorkflowStateService kycWorkflowStateService(
+        WorkflowAgentStateService workflowAgentStateService(
                 WorkflowStateMapper workflowStateMapper,
                 AgentStateMapper agentStateMapper,
-                AgentArtifactMapper agentArtifactMapper,
-                org.springframework.context.ApplicationEventPublisher eventPublisher,
-                ObjectMapper objectMapper) {
-            return new KycWorkflowStateService(
-                    workflowStateMapper, agentStateMapper, agentArtifactMapper, eventPublisher, objectMapper);
+                AgentArtifactMapper agentArtifactMapper) {
+            return new WorkflowAgentStateService(
+                    workflowStateMapper, agentStateMapper, agentArtifactMapper);
         }
 
         @Bean
         KycWorkflowExecutionService kycWorkflowExecutionService(
-                KycWorkflowStateService stateService,
                 KycCustomerDataLoader dataLoader,
                 KycDataMaskingService maskingService,
-                KycAgentExecutor kycAgentExecutor) {
-            return new KycWorkflowExecutionService(stateService, dataLoader, maskingService, kycAgentExecutor);
+                KycAgentExecutor kycAgentExecutor,
+                ObjectMapper objectMapper,
+                org.springframework.context.ApplicationEventPublisher eventPublisher) {
+            return new KycWorkflowExecutionService(
+                    dataLoader, maskingService, kycAgentExecutor, objectMapper, eventPublisher);
         }
 
         @Bean
-        KycWorkflowListener kycWorkflowListener(KycWorkflowExecutionService executionService) {
-            return new KycWorkflowListener(executionService);
+        DownstreamAgentExecutionService downstreamAgentExecutionService() {
+            return org.mockito.Mockito.mock(DownstreamAgentExecutionService.class);
+        }
+
+        @Bean
+        AgentExecutionListener agentExecutionListener(
+                KycWorkflowExecutionService kycExecutionService,
+                DownstreamAgentExecutionService downstreamExecutionService) {
+            return new AgentExecutionListener(kycExecutionService, downstreamExecutionService);
         }
 
         @Bean
@@ -636,27 +647,34 @@ class KycDatabaseWorkflowLiveTest {
         }
 
         @Bean
-        AgentWorkflowStateService agentWorkflowStateService(
-                WorkflowStateMapper workflowStateMapper,
-                AgentStateMapper agentStateMapper,
+        WorkflowAgentDispatchService workflowAgentDispatchService(
+                WorkflowAgentStateService stateService,
                 AgentArtifactMapper agentArtifactMapper,
                 org.springframework.context.ApplicationEventPublisher eventPublisher) {
-            return new AgentWorkflowStateService(
-                    workflowStateMapper, agentStateMapper, agentArtifactMapper, eventPublisher);
+            return new WorkflowAgentDispatchService(stateService, agentArtifactMapper, eventPublisher);
+        }
+
+        @Bean
+        WorkflowAgentDispatchListener workflowAgentDispatchListener(
+                WorkflowAgentDispatchService dispatchService) {
+            return new WorkflowAgentDispatchListener(dispatchService);
         }
 
         @Bean
         WorkflowAgentResultListener workflowAgentResultListener(
                 WorkflowStateMapper workflowStateMapper,
-                AgentStateMapper agentStateMapper,
-                AgentArtifactMapper agentArtifactMapper,
-                AgentWorkflowStateService agentWorkflowStateService,
+                WorkflowAgentStateService agentStateService,
                 WorkflowEventHub eventHub,
                 org.springframework.context.ApplicationEventPublisher eventPublisher,
                 ObjectMapper objectMapper) {
             return new WorkflowAgentResultListener(
-                    workflowStateMapper, agentStateMapper, agentArtifactMapper,
-                    agentWorkflowStateService, eventHub, eventPublisher, objectMapper);
+                    workflowStateMapper, agentStateService, eventHub, eventPublisher, objectMapper);
+        }
+
+        @Bean
+        WorkflowAgentResultEventDispatcher workflowAgentResultEventDispatcher(
+                WorkflowAgentResultListener resultListener) {
+            return new WorkflowAgentResultEventDispatcher(resultListener);
         }
 
         @Bean
@@ -682,6 +700,7 @@ class KycDatabaseWorkflowLiveTest {
                 WorkflowStateMapper workflowStateMapper,
                 AgentStateMapper agentStateMapper,
                 AgentArtifactMapper agentArtifactMapper,
+                WorkflowAgentStateService agentStateService,
                 com.privatebank.business.mapper.workflow.WorkflowReviewMapper reviewMapper,
                 CustomerDataMapper customerDataMapper,
                 com.privatebank.business.mapper.workflow.ImportBatchMapper importBatchMapper,
@@ -693,7 +712,8 @@ class KycDatabaseWorkflowLiveTest {
                 FileStorageService fileStorageService,
                 CustomerInsightAliasRestorer customerInsightAliasRestorer) {
             return new WorkflowService(
-                    workflowStateMapper, agentStateMapper, agentArtifactMapper, reviewMapper, customerDataMapper, importBatchMapper,
+                    workflowStateMapper, agentStateMapper, agentArtifactMapper, agentStateService,
+                    reviewMapper, customerDataMapper, importBatchMapper,
                     currentUserService, idempotencyExecutor, eventHub, eventPublisher, objectMapper, fileStorageService,
                     customerInsightAliasRestorer);
         }

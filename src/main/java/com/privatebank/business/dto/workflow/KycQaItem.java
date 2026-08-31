@@ -1,4 +1,4 @@
-package com.privatebank.agent.domain.kyc;
+package com.privatebank.business.dto.workflow;
 
 /**
  * A sanitized question/answer pair used for KYC clarification.

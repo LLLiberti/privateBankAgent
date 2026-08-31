@@ -1,20 +1,19 @@
 package com.privatebank.business.service.workflow;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.privatebank.agent.domain.event.AgentFailedEvent;
-import com.privatebank.agent.infrastructure.workflow.AgentWorkflowStateService;
-import com.privatebank.agent.domain.event.AgentSucceededEvent;
+import com.privatebank.agent.application.runtime.AgentExecutionCompletedEvent;
+import com.privatebank.agent.application.runtime.AgentExecutionFailedEvent;
 import com.privatebank.business.entity.workflow.AgentArtifact;
 import com.privatebank.business.entity.workflow.AgentState;
 import com.privatebank.business.entity.workflow.WorkflowState;
 import com.privatebank.business.enums.workflow.AgentStatus;
 import com.privatebank.business.enums.workflow.AgentType;
 import com.privatebank.business.enums.workflow.WorkflowStatus;
-import com.privatebank.business.mapper.workflow.AgentArtifactMapper;
-import com.privatebank.business.mapper.workflow.AgentStateMapper;
 import com.privatebank.business.mapper.workflow.WorkflowStateMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;
+
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -28,89 +27,70 @@ import static org.mockito.Mockito.when;
 class WorkflowAgentResultListenerTest {
 
     @Test
-    void transitionsToWaitingInputOnlyAfterCurrentKycSuccess() {
-        WorkflowStateMapper workflowMapper = mock(WorkflowStateMapper.class);
-        AgentStateMapper agentStateMapper = mock(AgentStateMapper.class);
-        AgentArtifactMapper artifactMapper = mock(AgentArtifactMapper.class);
-        WorkflowEventHub eventHub = mock(WorkflowEventHub.class);
-        WorkflowAgentResultListener listener = new WorkflowAgentResultListener(
-                workflowMapper,
-                agentStateMapper,
-                artifactMapper,
-                mock(AgentWorkflowStateService.class),
-                eventHub,
-                mock(ApplicationEventPublisher.class),
-                new ObjectMapper().findAndRegisterModules());
+    void persistsKycResultThenTransitionsWorkflowToWaitingInput() {
+        Fixture fixture = fixture();
+        AgentExecutionCompletedEvent event = completed(AgentType.CUSTOMER_INSIGHT);
         WorkflowState workflow = workflow(WorkflowStatus.RUNNING);
-        AgentState state = agentState(AgentStatus.SUCCESS, "EXE-1");
-        AgentArtifact artifact = artifact("ART-1", "EXE-1");
-        when(workflowMapper.selectById("WF-1")).thenReturn(workflow);
-        when(agentStateMapper.selectById("AS-1")).thenReturn(state);
-        when(artifactMapper.selectById("ART-1")).thenReturn(artifact);
-        when(workflowMapper.updateById(any(WorkflowState.class))).thenReturn(1);
+        AgentArtifact artifact = artifact("ART-KYC", AgentType.CUSTOMER_INSIGHT, "{}");
+        when(fixture.stateService.complete(event)).thenReturn(Optional.of(
+                new WorkflowAgentStateService.PersistedAgentResult(
+                        workflow, state(AgentType.CUSTOMER_INSIGHT, AgentStatus.SUCCESS), artifact)));
+        when(fixture.workflowMapper.updateById(any(WorkflowState.class))).thenReturn(1);
 
-        listener.onAgentSucceeded(new AgentSucceededEvent(
-                "WF-1", "AS-1", AgentType.CUSTOMER_INSIGHT, "EXE-1", "ART-1"));
+        fixture.listener.onAgentCompleted(event);
 
         assertThat(workflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.WAITING_INPUT);
-        assertThat(workflow.getFinishTime()).isNull();
-        verify(eventHub).publish(eq("WF-1"), eq("KYC_ANALYSIS_COMPLETED"), any());
+        verify(fixture.stateService).complete(event);
+        verify(fixture.eventHub).publish(eq("WF-1"), eq("KYC_ANALYSIS_COMPLETED"), any());
     }
 
     @Test
-    void transitionsToFailedOnlyAfterCurrentKycFailure() {
-        WorkflowStateMapper workflowMapper = mock(WorkflowStateMapper.class);
-        AgentStateMapper agentStateMapper = mock(AgentStateMapper.class);
-        AgentArtifactMapper artifactMapper = mock(AgentArtifactMapper.class);
-        WorkflowEventHub eventHub = mock(WorkflowEventHub.class);
-        WorkflowAgentResultListener listener = new WorkflowAgentResultListener(
-                workflowMapper,
-                agentStateMapper,
-                artifactMapper,
-                mock(AgentWorkflowStateService.class),
-                eventHub,
-                mock(ApplicationEventPublisher.class),
-                new ObjectMapper().findAndRegisterModules());
+    void persistsFailureThenFailsWorkflow() {
+        Fixture fixture = fixture();
+        AgentExecutionFailedEvent event = new AgentExecutionFailedEvent(
+                "WF-1", "AS-CUSTOMER_INSIGHT", AgentType.CUSTOMER_INSIGHT,
+                "EXE-1", "MODEL_CALL_FAILED", "model unavailable");
         WorkflowState workflow = workflow(WorkflowStatus.RUNNING);
-        AgentState state = agentState(AgentStatus.FAILED, "EXE-1");
-        state.setErrorMessage("Model invocation failed");
-        when(workflowMapper.selectById("WF-1")).thenReturn(workflow);
-        when(agentStateMapper.selectById("AS-1")).thenReturn(state);
-        when(workflowMapper.updateById(any(WorkflowState.class))).thenReturn(1);
+        when(fixture.stateService.fail(event)).thenReturn(Optional.of(
+                new WorkflowAgentStateService.FailedAgentResult(
+                        workflow, state(AgentType.CUSTOMER_INSIGHT, AgentStatus.FAILED))));
+        when(fixture.workflowMapper.updateById(any(WorkflowState.class))).thenReturn(1);
 
-        listener.onAgentFailed(new AgentFailedEvent(
-                "WF-1", "AS-1", AgentType.CUSTOMER_INSIGHT, "EXE-1", "MODEL_CALL_FAILED"));
+        fixture.listener.onAgentFailed(event);
 
         assertThat(workflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.FAILED);
         assertThat(workflow.getErrorCode()).isEqualTo("MODEL_CALL_FAILED");
-        assertThat(workflow.getErrorMessage()).isEqualTo("Model invocation failed");
-        assertThat(workflow.getFinishTime()).isNotNull();
-        verify(eventHub).publish(eq("WF-1"), eq("KYC_ANALYSIS_FAILED"), any());
+        assertThat(workflow.getErrorMessage()).isEqualTo("model unavailable");
+        verify(fixture.eventHub).publish(eq("WF-1"), eq("KYC_ANALYSIS_FAILED"), any());
     }
 
     @Test
-    void dropsLateKycSuccessAfterWorkflowWasCanceled() {
+    void ignoresLateResultRejectedByTheStateOwner() {
+        Fixture fixture = fixture();
+        AgentExecutionCompletedEvent event = completed(AgentType.CUSTOMER_INSIGHT);
+        when(fixture.stateService.complete(event)).thenReturn(Optional.empty());
+
+        fixture.listener.onAgentCompleted(event);
+
+        verify(fixture.workflowMapper, never()).updateById(any(WorkflowState.class));
+        verifyNoInteractions(fixture.eventHub, fixture.eventPublisher);
+    }
+
+    private Fixture fixture() {
         WorkflowStateMapper workflowMapper = mock(WorkflowStateMapper.class);
-        AgentStateMapper agentStateMapper = mock(AgentStateMapper.class);
-        AgentArtifactMapper artifactMapper = mock(AgentArtifactMapper.class);
+        WorkflowAgentStateService stateService = mock(WorkflowAgentStateService.class);
         WorkflowEventHub eventHub = mock(WorkflowEventHub.class);
-        WorkflowAgentResultListener listener = new WorkflowAgentResultListener(
-                workflowMapper,
-                agentStateMapper,
-                artifactMapper,
-                mock(AgentWorkflowStateService.class),
-                eventHub,
-                mock(ApplicationEventPublisher.class),
-                new ObjectMapper().findAndRegisterModules());
-        when(workflowMapper.selectById("WF-1")).thenReturn(workflow(WorkflowStatus.CANCELED));
-        when(agentStateMapper.selectById("AS-1")).thenReturn(agentState(AgentStatus.SUCCESS, "EXE-1"));
-        when(artifactMapper.selectById("ART-1")).thenReturn(artifact("ART-1", "EXE-1"));
+        ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
+        return new Fixture(
+                workflowMapper, stateService, eventHub, eventPublisher,
+                new WorkflowAgentResultListener(
+                        workflowMapper, stateService, eventHub, eventPublisher,
+                        new ObjectMapper().findAndRegisterModules()));
+    }
 
-        listener.onAgentSucceeded(new AgentSucceededEvent(
-                "WF-1", "AS-1", AgentType.CUSTOMER_INSIGHT, "EXE-1", "ART-1"));
-
-        verify(workflowMapper, never()).updateById(any(WorkflowState.class));
-        verifyNoInteractions(eventHub);
+    private AgentExecutionCompletedEvent completed(AgentType type) {
+        return new AgentExecutionCompletedEvent(
+                "WF-1", "AS-" + type, type, "EXE-1", "{}", null, 0);
     }
 
     private WorkflowState workflow(WorkflowStatus status) {
@@ -121,24 +101,30 @@ class WorkflowAgentResultListenerTest {
         return workflow;
     }
 
-    private AgentState agentState(AgentStatus status, String executionId) {
+    private AgentState state(AgentType type, AgentStatus status) {
         AgentState state = new AgentState();
-        state.setAgentStateId("AS-1");
+        state.setAgentStateId("AS-" + type);
         state.setWorkflowId("WF-1");
-        state.setAgentType(AgentType.CUSTOMER_INSIGHT);
+        state.setAgentType(type);
         state.setAgentStatus(status);
-        state.setExecutionId(executionId);
-        state.setVersion(0L);
+        state.setExecutionId("EXE-1");
         return state;
     }
 
-    private AgentArtifact artifact(String artifactId, String executionId) {
+    private AgentArtifact artifact(String id, AgentType type, String result) {
         AgentArtifact artifact = new AgentArtifact();
-        artifact.setArtifactId(artifactId);
+        artifact.setArtifactId(id);
         artifact.setWorkflowId("WF-1");
-        artifact.setAgentStateId("AS-1");
-        artifact.setAgentType(AgentType.CUSTOMER_INSIGHT);
-        artifact.setExecutionId(executionId);
+        artifact.setAgentType(type);
+        artifact.setResult(result);
         return artifact;
+    }
+
+    private record Fixture(
+            WorkflowStateMapper workflowMapper,
+            WorkflowAgentStateService stateService,
+            WorkflowEventHub eventHub,
+            ApplicationEventPublisher eventPublisher,
+            WorkflowAgentResultListener listener) {
     }
 }

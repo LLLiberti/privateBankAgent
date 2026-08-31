@@ -7,8 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.privatebank.agent.domain.event.AgentExecutionRequestedEvent;
-import com.privatebank.agent.domain.kyc.KycQaItem;
+import com.privatebank.business.dto.workflow.KycQaItem;
 import com.privatebank.business.dto.common.PageResponse;
 import com.privatebank.business.common.exception.BusinessException;
 import com.privatebank.business.common.exception.ErrorCode;
@@ -82,6 +81,7 @@ public class WorkflowService {
     private final WorkflowStateMapper workflowMapper;
     private final AgentStateMapper agentStateMapper;
     private final AgentArtifactMapper artifactMapper;
+    private final WorkflowAgentStateService agentStateService;
     private final WorkflowReviewMapper reviewMapper;
     private final CustomerDataMapper customerDataMapper;
     private final ImportBatchMapper importBatchMapper;
@@ -319,15 +319,7 @@ public class WorkflowService {
 
         String failedExecutionId = state.getExecutionId();
         LocalDateTime now = LocalDateTime.now();
-        state.setAgentStatus(AgentStatus.READY);
-        state.setExecutionId("EXE-" + UUID.randomUUID());
-        state.setErrorCode(null);
-        state.setErrorMessage(null);
-        state.setStartTime(null);
-        state.setFinishTime(null);
-        if (agentStateMapper.updateById(state) != 1) {
-            throw conflict("客户洞察状态已被其他请求更新，请刷新后重试");
-        }
+        agentStateService.ready(workflowId, AgentType.CUSTOMER_INSIGHT);
 
         workflow.setWorkflowStatus(WorkflowStatus.RUNNING);
         workflow.setErrorCode(null);
@@ -367,8 +359,8 @@ public class WorkflowService {
 
         LocalDateTime now = LocalDateTime.now();
         if (request.action() == WorkflowInputRequest.Action.CONTINUE) {
-            ready(workflowId, AgentType.MARKET_INSIGHT, true);
-            ready(workflowId, AgentType.PRODUCT_EXPERT, true);
+            agentStateService.ready(workflowId, AgentType.MARKET_INSIGHT);
+            agentStateService.ready(workflowId, AgentType.PRODUCT_EXPERT);
             workflow.setWorkflowStatus(WorkflowStatus.RUNNING);
             workflow.setErrorCode(null);
             workflow.setErrorMessage(null);
@@ -387,7 +379,7 @@ public class WorkflowService {
         } else {
             requireSupplementForSupplementAction(request);
             List<KycQaItem> qaItems = mergeQaHistory(current, request.answers());
-            ready(workflowId, AgentType.CUSTOMER_INSIGHT, true);
+            agentStateService.ready(workflowId, AgentType.CUSTOMER_INSIGHT);
             workflow.setWorkflowStatus(WorkflowStatus.RUNNING);
             workflow.setUpdatedAt(now);
             updateWorkflow(workflow);
@@ -448,8 +440,9 @@ public class WorkflowService {
             workflow.setFinishTime(null);
         } else {
             workflow.setWorkflowStatus(WorkflowStatus.RUNNING);
-            ready(workflowId, AgentType.SOLUTION_DESIGN, true);
-            afterCommit(() -> eventPublisher.publishEvent(new AgentExecutionRequestedEvent(workflowId, AgentType.SOLUTION_DESIGN, latestInputRefs(workflowId))));
+            agentStateService.ready(workflowId, AgentType.SOLUTION_DESIGN);
+            afterCommit(() -> eventPublisher.publishEvent(new AgentDispatchRequestedEvent(
+                    workflowId, AgentType.SOLUTION_DESIGN, latestInputRefs(workflowId))));
         }
         workflow.setUpdatedAt(LocalDateTime.now());
         updateWorkflow(workflow);
@@ -740,26 +733,6 @@ public class WorkflowService {
             }
         } catch (JsonProcessingException exception) {
             throw new BusinessException(HttpStatus.CONFLICT, ErrorCode.STALE_ARTIFACT, "合规结果格式无效");
-        }
-    }
-
-    private void ready(String workflowId, AgentType type, boolean newExecution) {
-        AgentState state = agentStateMapper.selectOne(Wrappers.<AgentState>lambdaQuery()
-                .eq(AgentState::getWorkflowId, workflowId)
-                .eq(AgentState::getAgentType, type));
-        if (state == null) {
-            throw notFound("Agent状态不存在");
-        }
-        state.setAgentStatus(AgentStatus.READY);
-        state.setErrorCode(null);
-        state.setErrorMessage(null);
-        state.setStartTime(null);
-        state.setFinishTime(null);
-        if (newExecution) {
-            state.setExecutionId("EXE-" + UUID.randomUUID());
-        }
-        if (agentStateMapper.updateById(state) != 1) {
-            throw conflict("Agent状态已被其他请求更新，请刷新后重试");
         }
     }
 

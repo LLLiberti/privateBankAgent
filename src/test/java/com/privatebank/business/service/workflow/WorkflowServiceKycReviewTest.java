@@ -19,8 +19,7 @@ import com.privatebank.business.entity.workflow.AgentArtifact;
 import com.privatebank.business.entity.workflow.AgentState;
 import com.privatebank.business.entity.workflow.WorkflowState;
 import com.privatebank.business.entity.workflow.WorkflowReview;
-import com.privatebank.agent.domain.event.AgentExecutionRequestedEvent;
-import com.privatebank.agent.domain.kyc.KycQaItem;
+import com.privatebank.business.dto.workflow.KycQaItem;
 import com.privatebank.business.enums.auth.RoleName;
 import com.privatebank.business.enums.workflow.AgentStatus;
 import com.privatebank.business.enums.workflow.CfsReportStatus;
@@ -366,7 +365,7 @@ class WorkflowServiceKycReviewTest {
         assertThat(workflow.getErrorMessage()).isNull();
         assertThat(workflow.getFinishTime()).isNull();
         assertThat(kycState.getAgentStatus()).isEqualTo(AgentStatus.READY);
-        assertThat(kycState.getExecutionId()).startsWith("EXE-").isNotEqualTo("EXE-FAILED");
+        assertThat(kycState.getExecutionId()).isEqualTo("EXE-FAILED");
         assertThat(kycState.getErrorCode()).isNull();
         assertThat(kycState.getErrorMessage()).isNull();
         assertThat(kycState.getStartTime()).isNull();
@@ -405,7 +404,7 @@ class WorkflowServiceKycReviewTest {
         assertThat(workflow.getErrorMessage()).isNull();
         assertThat(workflow.getFinishTime()).isNull();
         assertThat(kycState.getAgentStatus()).isEqualTo(AgentStatus.READY);
-        assertThat(kycState.getExecutionId()).startsWith("EXE-").isNotEqualTo("EXE-FAILED");
+        assertThat(kycState.getExecutionId()).isEqualTo("EXE-FAILED");
         assertThat(kycState.getErrorCode()).isNull();
         assertThat(kycState.getErrorMessage()).isNull();
         assertThat(kycState.getStartTime()).isNull();
@@ -602,10 +601,10 @@ class WorkflowServiceKycReviewTest {
         assertThat(response.workflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
         assertThat(workflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
         assertThat(cfsState.getAgentStatus()).isEqualTo(AgentStatus.READY);
-        assertThat(cfsState.getExecutionId()).startsWith("EXE-").isNotEqualTo("EXE-CFS-OLD");
+        assertThat(cfsState.getExecutionId()).isEqualTo("EXE-CFS-OLD");
         ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
         verify(fixture.eventPublisher).publishEvent(eventCaptor.capture());
-        assertThat(eventCaptor.getValue()).isEqualTo(new AgentExecutionRequestedEvent(
+        assertThat(eventCaptor.getValue()).isEqualTo(new AgentDispatchRequestedEvent(
                 "WF-1", AgentType.SOLUTION_DESIGN, Map.of(
                         "kycArtifactId", "ART-KYC",
                         "marketArtifactId", "ART-MARKET",
@@ -721,10 +720,13 @@ class WorkflowServiceKycReviewTest {
         CustomerDataMapper customerDataMapper = mock(CustomerDataMapper.class);
         ImportBatchMapper importBatchMapper = mock(ImportBatchMapper.class);
         WorkflowReviewMapper reviewMapper = mock(WorkflowReviewMapper.class);
+        WorkflowAgentStateService agentStateService =
+                new WorkflowAgentStateService(workflowMapper, agentStateMapper, artifactMapper);
         WorkflowService service = new WorkflowService(
                 workflowMapper,
                 agentStateMapper,
                 artifactMapper,
+                agentStateService,
                 reviewMapper,
                 customerDataMapper,
                 importBatchMapper,

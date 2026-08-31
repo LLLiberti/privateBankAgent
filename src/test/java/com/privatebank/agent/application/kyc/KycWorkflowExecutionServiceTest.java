@@ -1,5 +1,10 @@
 package com.privatebank.agent.application.kyc;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.privatebank.agent.application.runtime.AgentExecutionCompletedEvent;
+import com.privatebank.agent.application.runtime.AgentExecutionFailedEvent;
+import com.privatebank.agent.application.runtime.AgentExecutionRequestedEvent;
 import com.privatebank.agent.application.runtime.AgentExecutionResult;
 import com.privatebank.agent.application.runtime.AgentRuntimeException;
 import com.privatebank.agent.domain.kyc.KycCustomerData;
@@ -9,98 +14,98 @@ import com.privatebank.agent.domain.kyc.KycMaskedInput;
 import com.privatebank.agent.domain.kyc.KycOutputValidationException;
 import com.privatebank.agent.domain.kyc.KycStructuredResult;
 import com.privatebank.agent.infrastructure.kyc.KycCustomerDataLoader;
-import com.privatebank.agent.infrastructure.kyc.KycWorkflowStateService;
 import com.privatebank.business.dto.customer.CustomerSummaryResponse;
 import com.privatebank.business.enums.workflow.AgentType;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class KycWorkflowExecutionServiceTest {
 
     @Test
-    void completesClaimedWorkflowWithMaskedInputAndValidatedAnalysis() {
-        Fixture fixture = fixture("WF-1", 100L, "EXE-1");
-        KycGenerationResult result = new KycGenerationResult(validResult(), 1, "fake-deepseek");
+    void publishesCompletedResultAfterExecutingConcreteKycCapability() throws Exception {
+        Fixture fixture = fixture();
         when(fixture.executor.execute(any())).thenReturn(
-                new AgentExecutionResult<>(structuredResult(), 1, "fake-deepseek"));
-        when(fixture.executor.toGenerationResult(any())).thenReturn(result);
+                new AgentExecutionResult<>(structuredResult(), 2, "fake-deepseek"));
+        when(fixture.executor.toGenerationResult(any())).thenReturn(
+                new KycGenerationResult(validResult(), 2, "fake-deepseek"));
 
-        fixture.service.execute("WF-1");
+        fixture.service.execute(fixture.event);
 
-        verify(fixture.stateService).complete(eq(fixture.claim), eq(fixture.input), eq(result));
+        verify(fixture.loader).load(100L);
+        verify(fixture.maskingService).mask(eq(fixture.data), eq(KycRuntimeSupplement.empty()));
+        ArgumentCaptor<Object> published = ArgumentCaptor.forClass(Object.class);
+        verify(fixture.publisher).publishEvent(published.capture());
+        assertThat(published.getValue()).isInstanceOf(AgentExecutionCompletedEvent.class);
+        AgentExecutionCompletedEvent completed = (AgentExecutionCompletedEvent) published.getValue();
+        assertThat(completed.executionId()).isEqualTo("EXE-1");
+        assertThat(completed.retryCountIncrement()).isEqualTo(1);
+        JsonNode saved = fixture.objectMapper.readTree(completed.resultJson());
+        assertThat(saved.path("contractVersion").asText()).isEqualTo("kyc-result.v2");
+        assertThat(saved.path("maskedInputSha256").asText()).isEqualTo("b".repeat(64));
+        assertThat(saved.path("analysis").path("summary").asText()).isEqualTo("ok");
     }
 
     @Test
-    void marksWorkflowFailedWhenBusinessValidationCannotBeRepaired() {
-        Fixture fixture = fixture("WF-2", 101L, "EXE-2");
+    void publishesContractFailureWhenBusinessValidationCannotBeRepaired() {
+        Fixture fixture = fixture();
         when(fixture.executor.execute(any())).thenThrow(new KycGenerationException(
                 "连续返回不符合业务约束的结果",
                 new KycOutputValidationException("graphAssessment 引用了非 Neo4j 关系证据")));
 
-        fixture.service.execute("WF-2");
+        fixture.service.execute(fixture.event);
 
-        verify(fixture.stateService).fail(
-                eq(fixture.claim), eq("KYC_OUTPUT_CONTRACT_INVALID"),
-                eq("KYC 分析结果未通过证据、格式或脱敏校验：graphAssessment 引用了非 Neo4j 关系证据"));
+        AgentExecutionFailedEvent failed = publishedFailure(fixture);
+        assertThat(failed.errorCode()).isEqualTo("KYC_OUTPUT_CONTRACT_INVALID");
+        assertThat(failed.errorMessage()).contains("graphAssessment 引用了非 Neo4j 关系证据");
     }
 
     @Test
-    void marksWorkflowFailedWhenAgentScopeRuntimeFails() {
-        Fixture fixture = fixture("WF-3", 102L, "EXE-3");
+    void publishesModelFailureWhenRuntimeFails() {
+        Fixture fixture = fixture();
         when(fixture.executor.execute(any())).thenThrow(new AgentRuntimeException("model unavailable"));
 
-        fixture.service.execute("WF-3");
+        fixture.service.execute(fixture.event);
 
-        verify(fixture.stateService).fail(
-                eq(fixture.claim), eq("KYC_MODEL_CALL_FAILED"), eq("KYC 模型调用失败，请稍后重试"));
+        AgentExecutionFailedEvent failed = publishedFailure(fixture);
+        assertThat(failed.errorCode()).isEqualTo("KYC_MODEL_CALL_FAILED");
+        assertThat(failed.errorMessage()).isEqualTo("KYC 模型调用失败，请稍后重试");
     }
 
-    @Test
-    void doesNotOverwriteSuccessfulExecutionWhenCompletionSideEffectFails() {
-        Fixture fixture = fixture("WF-4", 103L, "EXE-4");
-        KycGenerationResult result = new KycGenerationResult(validResult(), 1, "fake-deepseek");
-        when(fixture.executor.execute(any())).thenReturn(
-                new AgentExecutionResult<>(structuredResult(), 1, "fake-deepseek"));
-        when(fixture.executor.toGenerationResult(any())).thenReturn(result);
-        doThrow(new IllegalStateException("success event failed"))
-                .when(fixture.stateService).complete(eq(fixture.claim), eq(fixture.input), eq(result));
-
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> fixture.service.execute("WF-4"))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage("success event failed");
-
-        verify(fixture.stateService, never()).fail(
-                eq(fixture.claim), eq("KYC_MODEL_CALL_FAILED"), org.mockito.ArgumentMatchers.anyString());
+    private AgentExecutionFailedEvent publishedFailure(Fixture fixture) {
+        ArgumentCaptor<Object> published = ArgumentCaptor.forClass(Object.class);
+        verify(fixture.publisher).publishEvent(published.capture());
+        assertThat(published.getValue()).isInstanceOf(AgentExecutionFailedEvent.class);
+        return (AgentExecutionFailedEvent) published.getValue();
     }
 
-    private Fixture fixture(String workflowId, long personId, String executionId) {
-        KycWorkflowStateService stateService = mock(KycWorkflowStateService.class);
+    private Fixture fixture() {
         KycCustomerDataLoader loader = mock(KycCustomerDataLoader.class);
         KycDataMaskingService maskingService = mock(KycDataMaskingService.class);
         KycAgentExecutor executor = mock(KycAgentExecutor.class);
-        KycWorkflowExecutionService service = new KycWorkflowExecutionService(
-                stateService, loader, maskingService, executor);
-        KycExecutionClaim claim = new KycExecutionClaim(workflowId, personId, executionId, "USER-1");
+        ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+        ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
         KycCustomerData data = emptyData();
         KycMaskedInput input = new KycMaskedInput(
                 Map.of("person", Map.of()), Map.of(), Set.of(), "b".repeat(64));
-        when(stateService.claim(workflowId)).thenReturn(Optional.of(claim));
-        when(loader.load(personId)).thenReturn(data);
+        when(loader.load(100L)).thenReturn(data);
         when(maskingService.mask(eq(data), eq(KycRuntimeSupplement.empty()))).thenReturn(input);
-        when(executor.agentType()).thenReturn(AgentType.CUSTOMER_INSIGHT);
-        return new Fixture(stateService, executor, service, claim, input);
+        AgentExecutionRequestedEvent event = new AgentExecutionRequestedEvent(
+                "WF-1", "AS-CUSTOMER_INSIGHT", AgentType.CUSTOMER_INSIGHT, "EXE-1",
+                "USER-1", 100L, Map.of(), Map.of(), null, List.of(), List.of());
+        return new Fixture(loader, maskingService, executor, publisher, objectMapper, data, input, event,
+                new KycWorkflowExecutionService(loader, maskingService, executor, objectMapper, publisher));
     }
 
     private KycCustomerData emptyData() {
@@ -112,7 +117,9 @@ class KycWorkflowExecutionServiceTest {
     }
 
     private String validResult() {
-        return "{\"riskLevel\":\"LOW\",\"summary\":\"ok\",\"findings\":[],\"riskAlerts\":[],\"recommendedActions\":[],\"dataGaps\":[],\"graphAssessment\":{\"contribution\":\"NOT_AVAILABLE\",\"summary\":\"no graph\",\"evidenceRefs\":[]}}";
+        return "{\"riskLevel\":\"LOW\",\"summary\":\"ok\",\"findings\":[],\"riskAlerts\":[],"
+                + "\"recommendedActions\":[],\"dataGaps\":[],\"graphAssessment\":"
+                + "{\"contribution\":\"NOT_AVAILABLE\",\"summary\":\"no graph\",\"evidenceRefs\":[]}}";
     }
 
     private KycStructuredResult structuredResult() {
@@ -123,10 +130,14 @@ class KycWorkflowExecutionServiceTest {
     }
 
     private record Fixture(
-            KycWorkflowStateService stateService,
+            KycCustomerDataLoader loader,
+            KycDataMaskingService maskingService,
             KycAgentExecutor executor,
-            KycWorkflowExecutionService service,
-            KycExecutionClaim claim,
-            KycMaskedInput input) {
+            ApplicationEventPublisher publisher,
+            ObjectMapper objectMapper,
+            KycCustomerData data,
+            KycMaskedInput input,
+            AgentExecutionRequestedEvent event,
+            KycWorkflowExecutionService service) {
     }
 }

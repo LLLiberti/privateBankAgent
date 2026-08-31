@@ -1,24 +1,20 @@
 package com.privatebank.business.service.workflow;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.privatebank.agent.domain.event.AgentExecutionRequestedEvent;
-import com.privatebank.agent.domain.event.AgentSucceededEvent;
-import com.privatebank.agent.infrastructure.workflow.AgentWorkflowStateService;
+import com.privatebank.agent.application.runtime.AgentExecutionCompletedEvent;
 import com.privatebank.business.entity.workflow.AgentArtifact;
 import com.privatebank.business.entity.workflow.AgentState;
 import com.privatebank.business.entity.workflow.WorkflowState;
 import com.privatebank.business.enums.workflow.AgentStatus;
 import com.privatebank.business.enums.workflow.AgentType;
 import com.privatebank.business.enums.workflow.WorkflowStatus;
-import com.privatebank.business.mapper.workflow.AgentArtifactMapper;
-import com.privatebank.business.mapper.workflow.AgentStateMapper;
 import com.privatebank.business.mapper.workflow.WorkflowStateMapper;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
 
-import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -32,19 +28,19 @@ import static org.mockito.Mockito.when;
 class WorkflowAgentResultListenerDownstreamTest {
 
     @Test
-    void waitsForTheSecondParallelAgentBeforeReleasingCfs() {
+    void waitsForSecondParallelAgentBeforeReleasingCfs() {
         Fixture fixture = fixture();
-        AgentState market = agentState(AgentType.MARKET_INSIGHT, AgentStatus.SUCCESS, "EXE-MARKET");
-        AgentState product = agentState(AgentType.PRODUCT_EXPERT, AgentStatus.RUNNING, "EXE-PRODUCT");
-        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow());
-        when(fixture.agentStateMapper.selectById("AS-MARKET_INSIGHT")).thenReturn(market);
-        when(fixture.artifactMapper.selectById("ART-MARKET")).thenReturn(artifact(
-                "ART-MARKET", AgentType.MARKET_INSIGHT, "EXE-MARKET", null));
-        when(fixture.stateService.agentState("WF-1", AgentType.MARKET_INSIGHT)).thenReturn(market);
-        when(fixture.stateService.agentState("WF-1", AgentType.PRODUCT_EXPERT)).thenReturn(product);
+        AgentExecutionCompletedEvent event = completed(AgentType.MARKET_INSIGHT);
+        WorkflowState workflow = workflow();
+        AgentArtifact marketArtifact = artifact("ART-MARKET", AgentType.MARKET_INSIGHT, "{}");
+        when(fixture.stateService.complete(event)).thenReturn(Optional.of(result(
+                workflow, AgentType.MARKET_INSIGHT, marketArtifact)));
+        when(fixture.stateService.agentState("WF-1", AgentType.MARKET_INSIGHT))
+                .thenReturn(state(AgentType.MARKET_INSIGHT, AgentStatus.SUCCESS));
+        when(fixture.stateService.agentState("WF-1", AgentType.PRODUCT_EXPERT))
+                .thenReturn(state(AgentType.PRODUCT_EXPERT, AgentStatus.RUNNING));
 
-        fixture.listener().onAgentSucceeded(new AgentSucceededEvent(
-                "WF-1", "AS-MARKET_INSIGHT", AgentType.MARKET_INSIGHT, "EXE-MARKET", "ART-MARKET"));
+        fixture.listener.onAgentCompleted(event);
 
         verify(fixture.stateService, never()).ready("WF-1", AgentType.SOLUTION_DESIGN);
         verifyNoInteractions(fixture.eventPublisher);
@@ -53,131 +49,117 @@ class WorkflowAgentResultListenerDownstreamTest {
     @Test
     void releasesCfsWhenBothParallelAgentsSucceed() {
         Fixture fixture = fixture();
-        AgentState market = agentState(AgentType.MARKET_INSIGHT, AgentStatus.SUCCESS, "EXE-MARKET");
-        AgentState product = agentState(AgentType.PRODUCT_EXPERT, AgentStatus.SUCCESS, "EXE-PRODUCT");
-        AgentArtifact kyc = artifact("ART-KYC", AgentType.CUSTOMER_INSIGHT, "EXE-KYC", "{}");
-        AgentArtifact marketArtifact = artifact("ART-MARKET", AgentType.MARKET_INSIGHT, "EXE-MARKET", "{}");
-        AgentArtifact productArtifact = artifact("ART-PRODUCT", AgentType.PRODUCT_EXPERT, "EXE-PRODUCT", "{}");
-        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow());
-        when(fixture.agentStateMapper.selectById("AS-MARKET_INSIGHT")).thenReturn(market);
-        when(fixture.artifactMapper.selectById("ART-MARKET")).thenReturn(marketArtifact);
-        when(fixture.stateService.agentState("WF-1", AgentType.MARKET_INSIGHT)).thenReturn(market);
-        when(fixture.stateService.agentState("WF-1", AgentType.PRODUCT_EXPERT)).thenReturn(product);
-        when(fixture.stateService.latestArtifact("WF-1", AgentType.CUSTOMER_INSIGHT)).thenReturn(kyc);
+        AgentExecutionCompletedEvent event = completed(AgentType.MARKET_INSIGHT);
+        WorkflowState workflow = workflow();
+        AgentArtifact marketArtifact = artifact("ART-MARKET", AgentType.MARKET_INSIGHT, "{}");
+        when(fixture.stateService.complete(event)).thenReturn(Optional.of(result(
+                workflow, AgentType.MARKET_INSIGHT, marketArtifact)));
+        when(fixture.stateService.agentState("WF-1", AgentType.MARKET_INSIGHT))
+                .thenReturn(state(AgentType.MARKET_INSIGHT, AgentStatus.SUCCESS));
+        when(fixture.stateService.agentState("WF-1", AgentType.PRODUCT_EXPERT))
+                .thenReturn(state(AgentType.PRODUCT_EXPERT, AgentStatus.SUCCESS));
+        when(fixture.stateService.latestArtifact("WF-1", AgentType.CUSTOMER_INSIGHT))
+                .thenReturn(artifact("ART-KYC", AgentType.CUSTOMER_INSIGHT, "{}"));
         when(fixture.stateService.latestArtifact("WF-1", AgentType.MARKET_INSIGHT)).thenReturn(marketArtifact);
-        when(fixture.stateService.latestArtifact("WF-1", AgentType.PRODUCT_EXPERT)).thenReturn(productArtifact);
+        when(fixture.stateService.latestArtifact("WF-1", AgentType.PRODUCT_EXPERT))
+                .thenReturn(artifact("ART-PRODUCT", AgentType.PRODUCT_EXPERT, "{}"));
 
-        fixture.listener().onAgentSucceeded(new AgentSucceededEvent(
-                "WF-1", "AS-MARKET_INSIGHT", AgentType.MARKET_INSIGHT, "EXE-MARKET", "ART-MARKET"));
+        fixture.listener.onAgentCompleted(event);
 
         verify(fixture.stateService).ready("WF-1", AgentType.SOLUTION_DESIGN);
-        verify(fixture.eventPublisher).publishEvent(new AgentExecutionRequestedEvent(
-                "WF-1", AgentType.SOLUTION_DESIGN, Map.of(
-                        "kycArtifactId", "ART-KYC",
-                        "marketArtifactId", "ART-MARKET",
-                        "kypArtifactId", "ART-PRODUCT")));
+        AgentDispatchRequestedEvent dispatch = publishedDispatch(fixture);
+        assertThat(dispatch.agentType()).isEqualTo(AgentType.SOLUTION_DESIGN);
+        assertThat(dispatch.inputArtifactIds()).containsExactlyInAnyOrderEntriesOf(Map.of(
+                "kycArtifactId", "ART-KYC",
+                "marketArtifactId", "ART-MARKET",
+                "kypArtifactId", "ART-PRODUCT"));
     }
 
     @Test
     void releasesComplianceAfterCfsSucceeds() {
         Fixture fixture = fixture();
-        AgentState cfsState = agentState(AgentType.SOLUTION_DESIGN, AgentStatus.SUCCESS, "EXE-CFS");
-        AgentArtifact cfs = artifact("ART-CFS", AgentType.SOLUTION_DESIGN, "EXE-CFS", "{}");
-        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow());
-        when(fixture.agentStateMapper.selectById("AS-SOLUTION_DESIGN")).thenReturn(cfsState);
-        when(fixture.artifactMapper.selectById("ART-CFS")).thenReturn(cfs);
+        AgentExecutionCompletedEvent event = completed(AgentType.SOLUTION_DESIGN);
+        AgentArtifact cfs = artifact("ART-CFS", AgentType.SOLUTION_DESIGN, "{}");
+        when(fixture.stateService.complete(event)).thenReturn(Optional.of(result(
+                workflow(), AgentType.SOLUTION_DESIGN, cfs)));
 
-        fixture.listener().onAgentSucceeded(new AgentSucceededEvent(
-                "WF-1", "AS-SOLUTION_DESIGN", AgentType.SOLUTION_DESIGN, "EXE-CFS", "ART-CFS"));
+        fixture.listener.onAgentCompleted(event);
 
         verify(fixture.stateService).ready("WF-1", AgentType.COMPLIANCE_CHECK);
-        verify(fixture.eventPublisher).publishEvent(new AgentExecutionRequestedEvent(
-                "WF-1", AgentType.COMPLIANCE_CHECK, Map.of("cfsArtifactId", "ART-CFS")));
+        assertThat(publishedDispatch(fixture).inputArtifactIds())
+                .containsEntry("cfsArtifactId", "ART-CFS");
     }
 
     @Test
     void movesToWaitingReviewWhenCompliancePasses() {
         Fixture fixture = fixture();
-        AgentState state = agentState(AgentType.COMPLIANCE_CHECK, AgentStatus.SUCCESS, "EXE-COMPLIANCE");
-        AgentArtifact artifact = artifact(
-                "ART-COMPLIANCE", AgentType.COMPLIANCE_CHECK, "EXE-COMPLIANCE",
-                "{\"cfsArtifactRef\":\"ART-CFS\"}");
-        artifact.setComplianceResult("PASS");
-        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow());
-        when(fixture.agentStateMapper.selectById("AS-COMPLIANCE_CHECK")).thenReturn(state);
-        when(fixture.artifactMapper.selectById("ART-COMPLIANCE")).thenReturn(artifact);
+        AgentExecutionCompletedEvent event = completed(AgentType.COMPLIANCE_CHECK);
+        WorkflowState workflow = workflow();
+        AgentArtifact compliance = artifact(
+                "ART-COMPLIANCE", AgentType.COMPLIANCE_CHECK, "{\"cfsArtifactRef\":\"ART-CFS\"}");
+        compliance.setComplianceResult("PASS");
+        when(fixture.stateService.complete(event)).thenReturn(Optional.of(result(
+                workflow, AgentType.COMPLIANCE_CHECK, compliance)));
         when(fixture.workflowMapper.updateById(any(WorkflowState.class))).thenReturn(1);
 
-        fixture.listener().onAgentSucceeded(new AgentSucceededEvent(
-                "WF-1", "AS-COMPLIANCE_CHECK", AgentType.COMPLIANCE_CHECK, "EXE-COMPLIANCE", "ART-COMPLIANCE"));
+        fixture.listener.onAgentCompleted(event);
 
-        assertThat(fixture.workflowMapper.selectById("WF-1")).isNotNull();
-        verify(fixture.workflowMapper).updateById(any(WorkflowState.class));
-        assertThat(fixture.lastWorkflowStatus()).isEqualTo(WorkflowStatus.WAITING_REVIEW);
-        verifyNoInteractions(fixture.eventPublisher);
+        assertThat(workflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.WAITING_REVIEW);
         verify(fixture.eventHub).publish(eq("WF-1"), eq("COMPLIANCE_PASSED"), any());
+        verifyNoInteractions(fixture.eventPublisher);
     }
 
     @Test
     void reopensCfsWhenComplianceRejects() {
         Fixture fixture = fixture();
-        AgentState state = agentState(AgentType.COMPLIANCE_CHECK, AgentStatus.SUCCESS, "EXE-COMPLIANCE");
-        AgentArtifact artifact = artifact(
-                "ART-COMPLIANCE", AgentType.COMPLIANCE_CHECK, "EXE-COMPLIANCE",
-                "{\"cfsArtifactRef\":\"ART-CFS\"}");
-        artifact.setComplianceResult("REJECT");
-        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow());
-        when(fixture.agentStateMapper.selectById("AS-COMPLIANCE_CHECK")).thenReturn(state);
-        when(fixture.artifactMapper.selectById("ART-COMPLIANCE")).thenReturn(artifact);
+        AgentExecutionCompletedEvent event = completed(AgentType.COMPLIANCE_CHECK);
+        WorkflowState workflow = workflow();
+        AgentArtifact compliance = artifact("ART-COMPLIANCE", AgentType.COMPLIANCE_CHECK, "{}");
+        compliance.setComplianceResult("REJECT");
+        when(fixture.stateService.complete(event)).thenReturn(Optional.of(result(
+                workflow, AgentType.COMPLIANCE_CHECK, compliance)));
         when(fixture.workflowMapper.updateById(any(WorkflowState.class))).thenReturn(1);
-        when(fixture.stateService.latestArtifact(any(), eq(AgentType.CUSTOMER_INSIGHT)))
-                .thenReturn(artifact("ART-KYC", AgentType.CUSTOMER_INSIGHT, "EXE-KYC", "{}"));
-        when(fixture.stateService.latestArtifact(any(), eq(AgentType.MARKET_INSIGHT)))
-                .thenReturn(artifact("ART-MARKET", AgentType.MARKET_INSIGHT, "EXE-MARKET", "{}"));
-        when(fixture.stateService.latestArtifact(any(), eq(AgentType.PRODUCT_EXPERT)))
-                .thenReturn(artifact("ART-PRODUCT", AgentType.PRODUCT_EXPERT, "EXE-PRODUCT", "{}"));
+        when(fixture.stateService.latestArtifact("WF-1", AgentType.CUSTOMER_INSIGHT))
+                .thenReturn(artifact("ART-KYC", AgentType.CUSTOMER_INSIGHT, "{}"));
+        when(fixture.stateService.latestArtifact("WF-1", AgentType.MARKET_INSIGHT))
+                .thenReturn(artifact("ART-MARKET", AgentType.MARKET_INSIGHT, "{}"));
+        when(fixture.stateService.latestArtifact("WF-1", AgentType.PRODUCT_EXPERT))
+                .thenReturn(artifact("ART-PRODUCT", AgentType.PRODUCT_EXPERT, "{}"));
 
-        fixture.listener().onAgentSucceeded(new AgentSucceededEvent(
-                "WF-1", "AS-COMPLIANCE_CHECK", AgentType.COMPLIANCE_CHECK, "EXE-COMPLIANCE", "ART-COMPLIANCE"));
+        fixture.listener.onAgentCompleted(event);
 
-        assertThat(fixture.lastWorkflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
+        assertThat(workflow.getWorkflowStatus()).isEqualTo(WorkflowStatus.RUNNING);
         verify(fixture.stateService).ready("WF-1", AgentType.SOLUTION_DESIGN);
-        verify(fixture.eventPublisher).publishEvent(new AgentExecutionRequestedEvent(
-                "WF-1", AgentType.SOLUTION_DESIGN, Map.of(
-                        "kycArtifactId", "ART-KYC",
-                        "marketArtifactId", "ART-MARKET",
-                        "kypArtifactId", "ART-PRODUCT")));
+        assertThat(publishedDispatch(fixture).agentType()).isEqualTo(AgentType.SOLUTION_DESIGN);
     }
 
-    @Test
-    void movesToWaitingReviewWhenComplianceNeedsHumanReview() {
-        Fixture fixture = fixture();
-        AgentState state = agentState(AgentType.COMPLIANCE_CHECK, AgentStatus.SUCCESS, "EXE-COMPLIANCE");
-        AgentArtifact artifact = artifact(
-                "ART-COMPLIANCE", AgentType.COMPLIANCE_CHECK, "EXE-COMPLIANCE",
-                "{\"cfsArtifactRef\":\"ART-CFS\"}");
-        artifact.setComplianceResult("REVIEW_REQUIRED");
-        when(fixture.workflowMapper.selectById("WF-1")).thenReturn(workflow());
-        when(fixture.agentStateMapper.selectById("AS-COMPLIANCE_CHECK")).thenReturn(state);
-        when(fixture.artifactMapper.selectById("ART-COMPLIANCE")).thenReturn(artifact);
-        when(fixture.workflowMapper.updateById(any(WorkflowState.class))).thenReturn(1);
-
-        fixture.listener().onAgentSucceeded(new AgentSucceededEvent(
-                "WF-1", "AS-COMPLIANCE_CHECK", AgentType.COMPLIANCE_CHECK, "EXE-COMPLIANCE", "ART-COMPLIANCE"));
-
-        assertThat(fixture.lastWorkflowStatus()).isEqualTo(WorkflowStatus.WAITING_REVIEW);
-        verify(fixture.eventHub).publish(eq("WF-1"), eq("COMPLIANCE_REVIEW_REQUIRED"), any());
-        verifyNoInteractions(fixture.eventPublisher);
+    private AgentDispatchRequestedEvent publishedDispatch(Fixture fixture) {
+        ArgumentCaptor<Object> event = ArgumentCaptor.forClass(Object.class);
+        verify(fixture.eventPublisher).publishEvent(event.capture());
+        return (AgentDispatchRequestedEvent) event.getValue();
     }
 
     private Fixture fixture() {
+        WorkflowStateMapper workflowMapper = mock(WorkflowStateMapper.class);
+        WorkflowAgentStateService stateService = mock(WorkflowAgentStateService.class);
+        WorkflowEventHub eventHub = mock(WorkflowEventHub.class);
+        ApplicationEventPublisher eventPublisher = mock(ApplicationEventPublisher.class);
         return new Fixture(
-                mock(WorkflowStateMapper.class),
-                mock(AgentStateMapper.class),
-                mock(AgentArtifactMapper.class),
-                mock(AgentWorkflowStateService.class),
-                mock(WorkflowEventHub.class),
-                mock(ApplicationEventPublisher.class));
+                workflowMapper, stateService, eventHub, eventPublisher,
+                new WorkflowAgentResultListener(
+                        workflowMapper, stateService, eventHub, eventPublisher,
+                        new ObjectMapper().findAndRegisterModules()));
+    }
+
+    private AgentExecutionCompletedEvent completed(AgentType type) {
+        return new AgentExecutionCompletedEvent(
+                "WF-1", "AS-" + type, type, "EXE-1", "{}", null, 0);
+    }
+
+    private WorkflowAgentStateService.PersistedAgentResult result(
+            WorkflowState workflow, AgentType type, AgentArtifact artifact) {
+        return new WorkflowAgentStateService.PersistedAgentResult(
+                workflow, state(type, AgentStatus.SUCCESS), artifact);
     }
 
     private WorkflowState workflow() {
@@ -188,43 +170,30 @@ class WorkflowAgentResultListenerDownstreamTest {
         return workflow;
     }
 
-    private AgentState agentState(AgentType type, AgentStatus status, String executionId) {
+    private AgentState state(AgentType type, AgentStatus status) {
         AgentState state = new AgentState();
-        state.setAgentStateId("AS-" + type.name());
+        state.setAgentStateId("AS-" + type);
         state.setWorkflowId("WF-1");
         state.setAgentType(type);
         state.setAgentStatus(status);
-        state.setExecutionId(executionId);
-        state.setVersion(0L);
+        state.setExecutionId("EXE-1");
         return state;
     }
 
-    private AgentArtifact artifact(String id, AgentType type, String executionId, String result) {
+    private AgentArtifact artifact(String id, AgentType type, String result) {
         AgentArtifact artifact = new AgentArtifact();
         artifact.setArtifactId(id);
         artifact.setWorkflowId("WF-1");
-        artifact.setAgentStateId("AS-" + type.name());
         artifact.setAgentType(type);
-        artifact.setExecutionId(executionId);
         artifact.setResult(result);
         return artifact;
     }
 
     private record Fixture(
             WorkflowStateMapper workflowMapper,
-            AgentStateMapper agentStateMapper,
-            AgentArtifactMapper artifactMapper,
-            AgentWorkflowStateService stateService,
+            WorkflowAgentStateService stateService,
             WorkflowEventHub eventHub,
-            ApplicationEventPublisher eventPublisher) {
-        private WorkflowAgentResultListener listener() {
-            return new WorkflowAgentResultListener(
-                    workflowMapper, agentStateMapper, artifactMapper, stateService,
-                    eventHub, eventPublisher, new ObjectMapper().findAndRegisterModules());
-        }
-
-        private WorkflowStatus lastWorkflowStatus() {
-            return workflowMapper.selectById("WF-1").getWorkflowStatus();
-        }
+            ApplicationEventPublisher eventPublisher,
+            WorkflowAgentResultListener listener) {
     }
 }

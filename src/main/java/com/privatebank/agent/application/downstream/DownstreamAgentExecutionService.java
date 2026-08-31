@@ -2,8 +2,10 @@ package com.privatebank.agent.application.downstream;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.privatebank.agent.application.runtime.AgentExecutionClaim;
+import com.privatebank.agent.application.runtime.AgentExecutionCompletedEvent;
+import com.privatebank.agent.application.runtime.AgentExecutionFailedEvent;
 import com.privatebank.agent.application.runtime.AgentExecutionRequest;
+import com.privatebank.agent.application.runtime.AgentExecutionRequestedEvent;
 import com.privatebank.agent.application.runtime.AgentExecutionResult;
 import com.privatebank.agent.domain.downstream.CfsDesignInput;
 import com.privatebank.agent.domain.downstream.CfsDesignResult;
@@ -13,141 +15,141 @@ import com.privatebank.agent.domain.downstream.KypRecommendationResult;
 import com.privatebank.agent.domain.downstream.MarketInsightInput;
 import com.privatebank.agent.domain.downstream.MarketInsightResult;
 import com.privatebank.agent.domain.downstream.ProductExpertInput;
-import com.privatebank.agent.infrastructure.workflow.AgentWorkflowStateService;
-import com.privatebank.business.entity.workflow.AgentArtifact;
-import com.privatebank.business.enums.workflow.AgentType;
-import com.privatebank.business.mapper.workflow.AgentArtifactMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Optional;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class DownstreamAgentExecutionService {
 
-    private final AgentWorkflowStateService stateService;
-    private final AgentArtifactMapper artifactMapper;
     private final MarketInsightAgentExecutor marketInsightExecutor;
     private final ProductExpertAgentExecutor productExpertExecutor;
     private final CfsDesignAgentExecutor cfsDesignExecutor;
     private final CfsDesignResultValidator cfsDesignResultValidator;
     private final ComplianceCheckAgentExecutor complianceCheckExecutor;
     private final ObjectMapper objectMapper;
+    private final ApplicationEventPublisher eventPublisher;
 
-    public void executeMarketInsight(String workflowId, String kycArtifactId) {
-        Optional<AgentExecutionClaim> optional = stateService.claim(workflowId, AgentType.MARKET_INSIGHT);
-        if (optional.isEmpty()) {
-            return;
-        }
-        AgentExecutionClaim claim = optional.get();
-        try {
-            AgentArtifact kyc = artifact(kycArtifactId);
-            MarketInsightInput input = new MarketInsightInput(
-                    workflowId, kycArtifactId, kyc.getResult(), "", "");
-            AgentExecutionResult<MarketInsightResult> result = marketInsightExecutor.execute(
-                    new AgentExecutionRequest<>(workflowId, claim.executionId(), claim.agentType(),
-                            claim.operatorUserId(), input, Map.of("kycArtifactId", kycArtifactId)));
-            stateService.complete(claim, write(result.output()), null);
-        } catch (Exception exception) {
-            fail(claim, "MARKET_INSIGHT_EXECUTION_FAILED", exception);
+    public void execute(AgentExecutionRequestedEvent event) {
+        switch (event.agentType()) {
+            case MARKET_INSIGHT -> executeMarketInsight(event);
+            case PRODUCT_EXPERT -> executeProductExpert(event);
+            case SOLUTION_DESIGN -> executeCfsDesign(event);
+            case COMPLIANCE_CHECK -> executeComplianceCheck(event);
+            default -> {
+                // CUSTOMER_INSIGHT is handled by KycWorkflowExecutionService.
+            }
         }
     }
 
-    public void executeProductExpert(String workflowId, String kycArtifactId) {
-        Optional<AgentExecutionClaim> optional = stateService.claim(workflowId, AgentType.PRODUCT_EXPERT);
-        if (optional.isEmpty()) {
-            return;
-        }
-        AgentExecutionClaim claim = optional.get();
+    private void executeMarketInsight(AgentExecutionRequestedEvent event) {
+        String kycArtifactId = artifactId(event, "kycArtifactId");
         try {
-            AgentArtifact kyc = artifact(kycArtifactId);
+            MarketInsightInput input = new MarketInsightInput(
+                    event.workflowId(), kycArtifactId, artifactResult(event, "kycArtifactId"), "", "");
+            AgentExecutionResult<MarketInsightResult> result = marketInsightExecutor.execute(
+                    request(event, input));
+            complete(event, write(result.output()), null);
+        } catch (Exception exception) {
+            fail(event, "MARKET_INSIGHT_EXECUTION_FAILED", exception);
+        }
+    }
+
+    private void executeProductExpert(AgentExecutionRequestedEvent event) {
+        String kycArtifactId = artifactId(event, "kycArtifactId");
+        try {
             ProductExpertInput input = new ProductExpertInput(
-                    workflowId,
+                    event.workflowId(),
                     kycArtifactId,
-                    kyc.getResult(),
+                    artifactResult(event, "kycArtifactId"),
                     List.of(),
                     List.of());
             AgentExecutionResult<KypRecommendationResult> result = productExpertExecutor.execute(
-                    new AgentExecutionRequest<>(workflowId, claim.executionId(), claim.agentType(),
-                            claim.operatorUserId(), input, Map.of("kycArtifactId", kycArtifactId)));
-            stateService.complete(claim, write(result.output()), null);
+                    request(event, input));
+            complete(event, write(result.output()), null);
         } catch (Exception exception) {
-            fail(claim, "PRODUCT_EXPERT_EXECUTION_FAILED", exception);
+            fail(event, "PRODUCT_EXPERT_EXECUTION_FAILED", exception);
         }
     }
 
-    public void executeCfsDesign(
-            String workflowId,
-            String kycArtifactId,
-            String marketArtifactId,
-            String kypArtifactId) {
-        Optional<AgentExecutionClaim> optional = stateService.claim(workflowId, AgentType.SOLUTION_DESIGN);
-        if (optional.isEmpty()) {
-            return;
-        }
-        AgentExecutionClaim claim = optional.get();
+    private void executeCfsDesign(AgentExecutionRequestedEvent event) {
         try {
             CfsDesignInput input = new CfsDesignInput(
-                    workflowId,
-                    kycArtifactId,
-                    marketArtifactId,
-                    kypArtifactId,
-                    artifact(kycArtifactId).getResult(),
-                    artifact(marketArtifactId).getResult(),
-                    artifact(kypArtifactId).getResult(),
+                    event.workflowId(),
+                    artifactId(event, "kycArtifactId"),
+                    artifactId(event, "marketArtifactId"),
+                    artifactId(event, "kypArtifactId"),
+                    artifactResult(event, "kycArtifactId"),
+                    artifactResult(event, "marketArtifactId"),
+                    artifactResult(event, "kypArtifactId"),
                     "CFS-3P6-V1",
                     "INITIAL",
                     null,
                     null);
             AgentExecutionResult<CfsDesignResult> result = cfsDesignExecutor.execute(
-                    new AgentExecutionRequest<>(workflowId, claim.executionId(), claim.agentType(),
-                            claim.operatorUserId(), input, Map.of(
-                            "kycArtifactId", kycArtifactId,
-                            "marketArtifactId", marketArtifactId,
-                            "kypArtifactId", kypArtifactId)));
+                    request(event, input));
             cfsDesignResultValidator.validate(result.output());
-            stateService.complete(claim, write(result.output()), null);
+            complete(event, write(result.output()), null);
         } catch (IllegalArgumentException validationException) {
-            fail(claim, "CFS_DESIGN_VALIDATION_FAILED", validationException);
+            fail(event, "CFS_DESIGN_VALIDATION_FAILED", validationException);
         } catch (Exception exception) {
-            fail(claim, "CFS_DESIGN_EXECUTION_FAILED", exception);
+            fail(event, "CFS_DESIGN_EXECUTION_FAILED", exception);
         }
     }
 
-    public void executeComplianceCheck(String workflowId, String cfsArtifactId) {
-        Optional<AgentExecutionClaim> optional = stateService.claim(workflowId, AgentType.COMPLIANCE_CHECK);
-        if (optional.isEmpty()) {
-            return;
-        }
-        AgentExecutionClaim claim = optional.get();
+    private void executeComplianceCheck(AgentExecutionRequestedEvent event) {
         try {
             ComplianceCheckInput input = new ComplianceCheckInput(
-                    workflowId,
-                    cfsArtifactId,
-                    artifact(cfsArtifactId).getResult(),
+                    event.workflowId(),
+                    artifactId(event, "cfsArtifactId"),
+                    artifactResult(event, "cfsArtifactId"),
                     "BEFORE_REVIEW",
                     "RULE-SET-V1",
                     "CFS-3P6-V1");
             AgentExecutionResult<ComplianceCheckResult> result = complianceCheckExecutor.execute(
-                    new AgentExecutionRequest<>(workflowId, claim.executionId(), claim.agentType(),
-                            claim.operatorUserId(), input, Map.of("cfsArtifactId", cfsArtifactId)));
-            stateService.complete(claim, write(result.output()), result.output().complianceResult());
+                    request(event, input));
+            complete(event, write(result.output()), result.output().complianceResult());
         } catch (Exception exception) {
-            fail(claim, "COMPLIANCE_CHECK_EXECUTION_FAILED", exception);
+            fail(event, "COMPLIANCE_CHECK_EXECUTION_FAILED", exception);
         }
     }
 
-    private AgentArtifact artifact(String artifactId) {
-        AgentArtifact artifact = artifactMapper.selectById(artifactId);
-        if (artifact == null) {
-            throw new IllegalStateException("Artifact不存在: " + artifactId);
+    private <I> AgentExecutionRequest<I> request(AgentExecutionRequestedEvent event, I input) {
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.putAll(event.inputArtifactIds());
+        if (event.personId() != null) {
+            metadata.put("personId", event.personId());
         }
-        return artifact;
+        return new AgentExecutionRequest<>(
+                event.workflowId(),
+                event.executionId(),
+                event.agentType(),
+                event.operatorUserId(),
+                input,
+                Map.copyOf(metadata));
+    }
+
+    private String artifactId(AgentExecutionRequestedEvent event, String key) {
+        String value = event.inputArtifactIds().get(key);
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException("Agent输入缺少Artifact引用: " + key);
+        }
+        return value;
+    }
+
+    private String artifactResult(AgentExecutionRequestedEvent event, String key) {
+        String value = event.inputArtifactResults().get(key);
+        if (value == null) {
+            throw new IllegalStateException("Agent输入缺少Artifact结果: " + key);
+        }
+        return value;
     }
 
     private String write(Object value) {
@@ -158,8 +160,25 @@ public class DownstreamAgentExecutionService {
         }
     }
 
-    private void fail(AgentExecutionClaim claim, String errorCode, Exception exception) {
-        log.warn("{} failed for workflow {}: {}", claim.agentType(), claim.workflowId(), exception.getMessage());
-        stateService.fail(claim, errorCode, exception.getMessage());
+    private void complete(AgentExecutionRequestedEvent event, String resultJson, String complianceResult) {
+        eventPublisher.publishEvent(new AgentExecutionCompletedEvent(
+                event.workflowId(),
+                event.agentStateId(),
+                event.agentType(),
+                event.executionId(),
+                resultJson,
+                complianceResult,
+                0));
+    }
+
+    private void fail(AgentExecutionRequestedEvent event, String errorCode, Exception exception) {
+        log.warn("{} failed for workflow {}: {}", event.agentType(), event.workflowId(), exception.getMessage());
+        eventPublisher.publishEvent(new AgentExecutionFailedEvent(
+                event.workflowId(),
+                event.agentStateId(),
+                event.agentType(),
+                event.executionId(),
+                errorCode,
+                exception.getMessage()));
     }
 }
